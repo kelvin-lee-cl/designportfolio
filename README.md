@@ -5,7 +5,6 @@ A Streamlit application for managing wastewater treatment plant (WWTP) design pr
 ## Features
 
 - **Project Management**: Create and switch between multiple WWTP design projects
-- **Design Journal**: Activity logging and tracking
 - **Default Parameters**: Cached default design parameters for quick access
 - **Multi-tab Interface**: Organized sections for Mass Balance, P&ID + Equipment List, Hydraulic Design, and Control Philosophy
 

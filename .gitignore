@@ -43,3 +43,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Project data
+projects_data/
+*.json
