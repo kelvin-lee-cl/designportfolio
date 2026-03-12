@@ -87,7 +87,13 @@ def load_project_data(project_key):
             if 'wwtp_design' in project_data:
                 st.session_state.wwtp_design = convert_numeric_values(project_data['wwtp_design'])
             if 'wwtp_overview' in project_data:
-                st.session_state.wwtp_overview = convert_numeric_values(project_data['wwtp_overview'])
+                wwtp_overview = convert_numeric_values(project_data['wwtp_overview'])
+                # Ensure discharge structure exists (backward compatibility)
+                if 'sewage_discharge' not in wwtp_overview:
+                    wwtp_overview['sewage_discharge'] = {'section': None, 'values': {}}
+                if 'sludge_discharge' not in wwtp_overview:
+                    wwtp_overview['sludge_discharge'] = {'section': None, 'values': {}}
+                st.session_state.wwtp_overview = wwtp_overview
             if 'mass_balance' in project_data:
                 st.session_state.mass_balance = convert_numeric_values(project_data['mass_balance'])
             if 'equipment_list' in project_data:
@@ -817,7 +823,8 @@ with st.expander("🔍 Session State Test"):
     st.write(f"Projects: {st.session_state.projects}")
     st.write(f"Full session state: {st.session_state}")
 
-tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs(['Overview','Mass Balance','P&ID + Equipment List','Hydraulic Design','Control Philosophy','Python Coding Guide'])
+# Main app tabs
+tab0, tab1, tab2 = st.tabs(['Overview', 'Mass Balance', 'Python Coding Guide'])
 
 # ==================== OVERVIEW TAB ====================
 with tab0:
@@ -828,10 +835,24 @@ with tab0:
     if 'wwtp_overview' not in st.session_state:
         st.session_state.wwtp_overview = {
             'sections': [],
-            'flow_connections': []
+            'flow_connections': [],
+            'sewage_discharge': {
+                'section': None,
+                'values': {}  # Will store BOD, TSS, etc.
+            },
+            'sludge_discharge': {
+                'section': None,
+                'values': {}  # Will store flow, solids, etc.
+            }
         }
     
     overview = st.session_state.wwtp_overview
+    
+    # Initialize discharge structure if not exists (backward compatibility)
+    if 'sewage_discharge' not in overview:
+        overview['sewage_discharge'] = {'section': None, 'values': {}}
+    if 'sludge_discharge' not in overview:
+        overview['sludge_discharge'] = {'section': None, 'values': {}}
     
     # Sync flow_connections with effluent_to for all sections
     # This ensures consistency between effluent_to and flow_connections
@@ -953,42 +974,56 @@ with tab0:
                     with col_sec2:
                         # Effluent destination (where does the effluent go)
                         st.markdown("**Effluent Flow:**")
-                        effluent_options = [s['name'] for s in overview['sections'] if s['name'] != section['name']]
-                        if effluent_options:
-                            # Initialize effluent_to if not exists
-                            if 'effluent_to' not in section:
-                                section['effluent_to'] = []
-                            
-                            # Get current selections
-                            current_effluent = section.get('effluent_to', [])
-                            if not isinstance(current_effluent, list):
-                                current_effluent = [current_effluent] if current_effluent else []
-                            
-                            # Multi-select for effluent destinations
-                            selected_effluent = st.multiselect(
-                                'Effluent Goes To:',
-                                effluent_options,
-                                default=[opt for opt in current_effluent if opt in effluent_options],
-                                key=f'effluent_to_{idx}',
-                                help='Select one or more sections where effluent flows to'
-                            )
-                            section['effluent_to'] = selected_effluent if selected_effluent else []
-                            
-                            # Update flow_connections based on effluent_to
-                            # Remove old connections from this section
+                        
+                        # Check if this section is set as final sewage discharge
+                        is_final_sewage_discharge = overview.get('sewage_discharge', {}).get('section') == section['name']
+                        
+                        if is_final_sewage_discharge:
+                            # This is the final sewage discharge - no effluent goes anywhere
+                            st.info("📍 **Final Sewage Discharge** - No downstream effluent flow")
+                            section['effluent_to'] = []
+                            # Clear any existing connections from this section
                             overview['flow_connections'] = [
                                 conn for conn in overview['flow_connections'] 
                                 if conn['from'] != section['name']
                             ]
-                            # Add new connections
-                            for effluent_dest in selected_effluent:
-                                overview['flow_connections'].append({
-                                    'from': section['name'],
-                                    'to': effluent_dest
-                                })
                         else:
-                            section['effluent_to'] = []
-                            st.caption("(No other sections available)")
+                            effluent_options = [s['name'] for s in overview['sections'] if s['name'] != section['name']]
+                            if effluent_options:
+                                # Initialize effluent_to if not exists
+                                if 'effluent_to' not in section:
+                                    section['effluent_to'] = []
+                                
+                                # Get current selections
+                                current_effluent = section.get('effluent_to', [])
+                                if not isinstance(current_effluent, list):
+                                    current_effluent = [current_effluent] if current_effluent else []
+                                
+                                # Multi-select for effluent destinations
+                                selected_effluent = st.multiselect(
+                                    'Effluent Goes To:',
+                                    effluent_options,
+                                    default=[opt for opt in current_effluent if opt in effluent_options],
+                                    key=f'effluent_to_{idx}',
+                                    help='Select one or more sections where effluent flows to'
+                                )
+                                section['effluent_to'] = selected_effluent if selected_effluent else []
+                                
+                                # Update flow_connections based on effluent_to
+                                # Remove old connections from this section
+                                overview['flow_connections'] = [
+                                    conn for conn in overview['flow_connections'] 
+                                    if conn['from'] != section['name']
+                                ]
+                                # Add new connections
+                                for effluent_dest in selected_effluent:
+                                    overview['flow_connections'].append({
+                                        'from': section['name'],
+                                        'to': effluent_dest
+                                    })
+                            else:
+                                section['effluent_to'] = []
+                                st.caption("(No other sections available)")
                         
                         st.divider()
                         
@@ -1012,23 +1047,44 @@ with tab0:
                                 section['return_to'] = return_to if return_to else None
                         
                         # Sludge generation
-                        generates_sludge = st.checkbox(
-                            'Generates Sludge',
-                            value=section.get('generates_sludge', False),
-                            key=f'sludge_gen_{idx}'
-                        )
-                        section['generates_sludge'] = generates_sludge
+                        # Check if this section is set as final sludge discharge
+                        is_final_sludge_discharge = overview.get('sludge_discharge', {}).get('section') == section['name']
                         
-                        if generates_sludge:
-                            sludge_options = [s['name'] for s in overview['sections'] if s['name'] != section['name']]
-                            if sludge_options:
-                                sludge_to = st.selectbox(
-                                    'Sludge To:',
-                                    [''] + sludge_options,
-                                    index=0 if not section.get('sludge_to') else sludge_options.index(section['sludge_to']) + 1 if section['sludge_to'] in sludge_options else 0,
-                                    key=f'sludge_to_{idx}'
-                                )
-                                section['sludge_to'] = sludge_to if sludge_to else None
+                        if is_final_sludge_discharge:
+                            # This is the final sludge discharge - show info and disable sludge generation
+                            st.info("📍 **Final Sludge Discharge** - This is the final sludge discharge point")
+                            section['generates_sludge'] = False
+                            section['sludge_to'] = None
+                            # Clear any existing sludge connections to this section
+                            for other_section in overview['sections']:
+                                if other_section.get('sludge_to') == section['name']:
+                                    other_section['sludge_to'] = None
+                        else:
+                            generates_sludge = st.checkbox(
+                                'Generates Sludge',
+                                value=section.get('generates_sludge', False),
+                                key=f'sludge_gen_{idx}'
+                            )
+                            section['generates_sludge'] = generates_sludge
+                            
+                            if generates_sludge:
+                                # Exclude final sludge discharge section from sludge options
+                                final_sludge_section = overview.get('sludge_discharge', {}).get('section')
+                                sludge_options = [s['name'] for s in overview['sections'] 
+                                                if s['name'] != section['name'] and s['name'] != final_sludge_section]
+                                if sludge_options:
+                                    sludge_to = st.selectbox(
+                                        'Sludge To:',
+                                        [''] + sludge_options,
+                                        index=0 if not section.get('sludge_to') else sludge_options.index(section['sludge_to']) + 1 if section['sludge_to'] in sludge_options else 0,
+                                        key=f'sludge_to_{idx}'
+                                    )
+                                    section['sludge_to'] = sludge_to if sludge_to else None
+                                else:
+                                    section['sludge_to'] = None
+                                    st.caption("(No downstream sludge sections available)")
+                            else:
+                                section['sludge_to'] = None
                     
                     with col_sec3:
                         if st.button('🗑️', key=f'delete_{idx}', help='Delete'):
@@ -1163,6 +1219,269 @@ with tab0:
     
     else:
         st.info("👆 Start by adding your first WWTP section above")
+    
+    # Section 3: Discharge Configuration
+    st.divider()
+    st.subheader('3️⃣ Discharge Configuration')
+    st.caption("Configure final discharge points and validate against Design Requirements")
+    
+    if overview['sections']:
+        # Get design requirements for validation
+        design_reqs = st.session_state.get('design_requirements', [])
+        req_dict = {req.get('name', ''): req for req in design_reqs}
+        
+        col_disch1, col_disch2 = st.columns(2)
+        
+        # Sewage Discharge Configuration
+        with col_disch1:
+            st.markdown("**🔵 Final Sewage Discharge**")
+            sewage_sections = [s['name'] for s in overview['sections'] if s.get('flow_type') == 'sewage']
+            if sewage_sections:
+                current_sewage_discharge = overview['sewage_discharge'].get('section')
+                sewage_discharge_idx = 0
+                if current_sewage_discharge and current_sewage_discharge in sewage_sections:
+                    sewage_discharge_idx = sewage_sections.index(current_sewage_discharge) + 1
+                
+                selected_sewage = st.selectbox(
+                    'Select Final Sewage Discharge Section:',
+                    ['None'] + sewage_sections,
+                    index=sewage_discharge_idx,
+                    key='sewage_discharge_section'
+                )
+                
+                # Clear effluent_to connections if this section is newly selected as final discharge
+                previous_sewage_discharge = overview['sewage_discharge'].get('section')
+                if selected_sewage != 'None' and selected_sewage != previous_sewage_discharge:
+                    # Clear effluent_to for the newly selected section
+                    for section in overview['sections']:
+                        if section['name'] == selected_sewage:
+                            section['effluent_to'] = []
+                            # Remove flow connections from this section
+                            overview['flow_connections'] = [
+                                conn for conn in overview['flow_connections'] 
+                                if conn['from'] != selected_sewage
+                            ]
+                            break
+                
+                overview['sewage_discharge']['section'] = selected_sewage if selected_sewage != 'None' else None
+                
+                if selected_sewage != 'None':
+                    st.markdown("**Discharge Values:**")
+                    sewage_values = overview['sewage_discharge'].get('values', {})
+                    
+                    # Get concentration parameters from defaults
+                    conc_params = get_flow_loading_conc_params()
+                    
+                    for default_key, mb_key in conc_params:
+                        # Check if there's a design requirement for this parameter
+                        req_key = f"{mb_key}_out"  # e.g., BOD_out, TSS_out
+                        req_key_alt = f"{mb_key}_discharge"  # Alternative naming
+                        
+                        # Find matching requirement
+                        matching_req = None
+                        for req_name, req in req_dict.items():
+                            if mb_key.lower() in req_name.lower() and ('out' in req_name.lower() or 'discharge' in req_name.lower() or 'effluent' in req_name.lower()):
+                                matching_req = req
+                                break
+                        
+                        current_val = sewage_values.get(mb_key, 0.0)
+                        unit = st.session_state.get('project_default_units', {}).get(default_key, 'mg/L')
+                        
+                        if matching_req:
+                            req_value = matching_req.get('value', 0.0)
+                            req_unit = matching_req.get('unit', 'mg/L')
+                            # Show requirement as hint
+                            st.caption(f"Requirement: {matching_req.get('name', '')} ≤ {req_value:.2f} {req_unit}")
+                            
+                            new_val = st.number_input(
+                                f'{mb_key} ({unit}):',
+                                value=float(current_val),
+                                min_value=0.0,
+                                format="%.2f",
+                                step=0.1,
+                                key=f'sewage_discharge_{mb_key}',
+                                help=f"Must meet requirement: {matching_req.get('name', '')} ≤ {req_value:.2f} {req_unit}"
+                            )
+                            sewage_values[mb_key] = new_val
+                            
+                            # Validation
+                            # Simple unit conversion check (assuming same unit type)
+                            if req_unit.lower() == unit.lower() or req_unit.replace('³', '3').lower() == unit.replace('³', '3').lower():
+                                if new_val > req_value:
+                                    st.error(f"❌ {mb_key} = {new_val:.2f} {unit} exceeds requirement of {req_value:.2f} {req_unit}")
+                                else:
+                                    st.success(f"✅ {mb_key} = {new_val:.2f} {unit} meets requirement")
+                            else:
+                                st.warning(f"⚠️ Unit mismatch: requirement is {req_unit}, input is {unit}")
+                        else:
+                            new_val = st.number_input(
+                                f'{mb_key} ({unit}):',
+                                value=float(current_val),
+                                min_value=0.0,
+                                format="%.2f",
+                                step=0.1,
+                                key=f'sewage_discharge_{mb_key}'
+                            )
+                            sewage_values[mb_key] = new_val
+                    
+                    overview['sewage_discharge']['values'] = sewage_values
+            else:
+                st.info("No sewage sections available")
+        
+        # Sludge Discharge Configuration
+        with col_disch2:
+            st.markdown("**🔴 Final Sludge Discharge**")
+            sludge_sections = [s['name'] for s in overview['sections'] if s.get('flow_type') == 'sludge']
+            # Also include sections that generate sludge
+            sludge_generating = [s['name'] for s in overview['sections'] if s.get('generates_sludge', False)]
+            all_sludge_sections = list(set(sludge_sections + sludge_generating))
+            
+            if all_sludge_sections:
+                current_sludge_discharge = overview['sludge_discharge'].get('section')
+                sludge_discharge_idx = 0
+                if current_sludge_discharge and current_sludge_discharge in all_sludge_sections:
+                    sludge_discharge_idx = all_sludge_sections.index(current_sludge_discharge) + 1
+                
+                selected_sludge = st.selectbox(
+                    'Select Final Sludge Discharge Section:',
+                    ['None'] + all_sludge_sections,
+                    index=sludge_discharge_idx,
+                    key='sludge_discharge_section'
+                )
+                
+                # Clear sludge_to connections if this section is newly selected as final discharge
+                previous_sludge_discharge = overview['sludge_discharge'].get('section')
+                if selected_sludge != 'None' and selected_sludge != previous_sludge_discharge:
+                    # Clear sludge_to for sections that were sending sludge to the newly selected section
+                    for section in overview['sections']:
+                        if section.get('sludge_to') == selected_sludge:
+                            section['sludge_to'] = None
+                            section['generates_sludge'] = False
+                
+                overview['sludge_discharge']['section'] = selected_sludge if selected_sludge != 'None' else None
+                
+                if selected_sludge != 'None':
+                    st.markdown("**Discharge Values:**")
+                    sludge_values = overview['sludge_discharge'].get('values', {})
+                    
+                    # Sludge flow
+                    current_flow = sludge_values.get('flow', 0.0)
+                    flow_req = None
+                    for req_name, req in req_dict.items():
+                        if 'sludge' in req_name.lower() and ('flow' in req_name.lower() or 'discharge' in req_name.lower()):
+                            flow_req = req
+                            break
+                    
+                    if flow_req:
+                        req_value = flow_req.get('value', 0.0)
+                        req_unit = flow_req.get('unit', 'm³/day')
+                        st.caption(f"Requirement: {flow_req.get('name', '')} ≤ {req_value:.2f} {req_unit}")
+                        
+                        new_flow = st.number_input(
+                            'Sludge Flow (m³/day):',
+                            value=float(current_flow),
+                            min_value=0.0,
+                            format="%.2f",
+                            step=10.0,
+                            key='sludge_discharge_flow',
+                            help=f"Must meet requirement: {flow_req.get('name', '')} ≤ {req_value:.2f} {req_unit}"
+                        )
+                        sludge_values['flow'] = new_flow
+                        
+                        # Validation
+                        if req_unit.lower() in ['m³/day', 'm3/day', 'm^3/day']:
+                            if new_flow > req_value:
+                                st.error(f"❌ Flow = {new_flow:.2f} m³/day exceeds requirement of {req_value:.2f} {req_unit}")
+                            else:
+                                st.success(f"✅ Flow = {new_flow:.2f} m³/day meets requirement")
+                        else:
+                            st.warning(f"⚠️ Unit mismatch: requirement is {req_unit}, input is m³/day")
+                    else:
+                        new_flow = st.number_input(
+                            'Sludge Flow (m³/day):',
+                            value=float(current_flow),
+                            min_value=0.0,
+                            format="%.2f",
+                            step=10.0,
+                            key='sludge_discharge_flow'
+                        )
+                        sludge_values['flow'] = new_flow
+                    
+                    # Sludge solids percentage
+                    current_solids = sludge_values.get('solids', 0.0)
+                    solids_req = None
+                    for req_name, req in req_dict.items():
+                        if 'sludge' in req_name.lower() and ('solids' in req_name.lower() or 'concentration' in req_name.lower()):
+                            solids_req = req
+                            break
+                    
+                    if solids_req:
+                        req_value = solids_req.get('value', 0.0)
+                        req_unit = solids_req.get('unit', '%')
+                        st.caption(f"Requirement: {solids_req.get('name', '')} ≥ {req_value:.2f} {req_unit}")
+                        
+                        new_solids = st.number_input(
+                            'Solids (%):',
+                            value=float(current_solids),
+                            min_value=0.0,
+                            max_value=100.0,
+                            format="%.2f",
+                            step=0.1,
+                            key='sludge_discharge_solids',
+                            help=f"Must meet requirement: {solids_req.get('name', '')} ≥ {req_value:.2f} {req_unit}"
+                        )
+                        sludge_values['solids'] = new_solids
+                        
+                        # Validation (for solids, typically we want >= requirement)
+                        if req_unit.lower() in ['%', 'percent', 'pct']:
+                            if new_solids < req_value:
+                                st.error(f"❌ Solids = {new_solids:.2f}% below requirement of {req_value:.2f}%")
+                            else:
+                                st.success(f"✅ Solids = {new_solids:.2f}% meets requirement")
+                        else:
+                            st.warning(f"⚠️ Unit mismatch: requirement is {req_unit}, input is %")
+                    else:
+                        new_solids = st.number_input(
+                            'Solids (%):',
+                            value=float(current_solids),
+                            min_value=0.0,
+                            max_value=100.0,
+                            format="%.2f",
+                            step=0.1,
+                            key='sludge_discharge_solids'
+                        )
+                        sludge_values['solids'] = new_solids
+                    
+                    overview['sludge_discharge']['values'] = sludge_values
+            else:
+                st.info("No sludge sections available")
+        
+        # Summary of discharge validation
+        if overview['sewage_discharge'].get('section') or overview['sludge_discharge'].get('section'):
+            st.divider()
+            st.markdown("**📊 Discharge Summary:**")
+            summary_discharge = []
+            
+            if overview['sewage_discharge'].get('section'):
+                sewage_section = overview['sewage_discharge']['section']
+                sewage_vals = overview['sewage_discharge'].get('values', {})
+                row = {'Type': 'Sewage Discharge', 'Section': sewage_section}
+                for key, val in sewage_vals.items():
+                    row[key] = f"{val:.2f}"
+                summary_discharge.append(row)
+            
+            if overview['sludge_discharge'].get('section'):
+                sludge_section = overview['sludge_discharge']['section']
+                sludge_vals = overview['sludge_discharge'].get('values', {})
+                row = {'Type': 'Sludge Discharge', 'Section': sludge_section}
+                for key, val in sludge_vals.items():
+                    row[key] = f"{val:.2f}"
+                summary_discharge.append(row)
+            
+            if summary_discharge:
+                st.dataframe(pd.DataFrame(summary_discharge), use_container_width=True, hide_index=True)
+    else:
+        st.info("👆 Add sections above to configure discharge points")
     
     # Store updated overview
     st.session_state.wwtp_overview = overview
@@ -2180,344 +2499,8 @@ with tab1:
         # Store updated mass balance
         st.session_state.mass_balance = st.session_state.mass_balance
 
-# ==================== P&ID + EQUIPMENT LIST TAB ====================
-with tab2:
-    st.header('🔧 P&ID + Equipment List')
-    st.caption("Major and minor equipment list based on sections defined in Overview tab")
-    
-    # Check if overview sections exist
-    overview = st.session_state.get('wwtp_overview', {'sections': [], 'flow_connections': []})
-    
-    if not overview['sections']:
-        st.warning("⚠️ **No sections defined yet!** Please go to the **Overview** tab first to define your WWTP sections.")
-    else:
-        # Initialize equipment storage
-        if 'equipment_list' not in st.session_state:
-            st.session_state.equipment_list = {}
-        
-        st.subheader('Equipment by Section')
-        
-        for section in overview['sections']:
-            section_name = section['name']
-            
-            with st.expander(f"⚙️ {section_name} - Equipment", expanded=False):
-                # Initialize section equipment if not exists
-                if section_name not in st.session_state.equipment_list:
-                    st.session_state.equipment_list[section_name] = {
-                        'major': [],
-                        'minor': []
-                    }
-                
-                eq_data = st.session_state.equipment_list[section_name]
-                
-                col_eq1, col_eq2 = st.columns(2)
-                
-                # Major Equipment
-                with col_eq1:
-                    st.markdown("**🔩 Major Equipment**")
-                    major_text = st.text_area(
-                        'Major Equipment (one per line):',
-                        value='\n'.join(eq_data['major']) if eq_data['major'] else '',
-                        height=150,
-                        key=f'eq_major_{section_name}',
-                        help="Examples: Pumps, Blowers, Mixers, Clarifiers"
-                    )
-                    eq_data['major'] = [line.strip() for line in major_text.split('\n') if line.strip()]
-                
-                # Minor Equipment
-                with col_eq2:
-                    st.markdown("**🔌 Minor Equipment**")
-                    minor_text = st.text_area(
-                        'Minor Equipment (one per line):',
-                        value='\n'.join(eq_data['minor']) if eq_data['minor'] else '',
-                        height=150,
-                        key=f'eq_minor_{section_name}',
-                        help="Examples: Valves, Instruments, Controls"
-                    )
-                    eq_data['minor'] = [line.strip() for line in minor_text.split('\n') if line.strip()]
-                
-                # Display equipment count
-                st.caption(f"📊 **Major:** {len(eq_data['major'])} items | **Minor:** {len(eq_data['minor'])} items")
-        
-        st.divider()
-        
-        # Equipment Summary
-        st.subheader('📋 Equipment Summary')
-        summary_rows = []
-        for section in overview['sections']:
-            section_name = section['name']
-            if section_name in st.session_state.equipment_list:
-                eq = st.session_state.equipment_list[section_name]
-                summary_rows.append({
-                    'Section': section_name,
-                    'Major Equipment': len(eq['major']),
-                    'Minor Equipment': len(eq['minor']),
-                    'Total': len(eq['major']) + len(eq['minor'])
-                })
-        
-        if summary_rows:
-            st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
-        
-        # Store updated equipment list
-        st.session_state.equipment_list = st.session_state.equipment_list
-
-# ==================== HYDRAULIC DESIGN TAB ====================
-with tab3:
-    st.header('🌊 Hydraulic Design')
-    st.caption("Stoplog, penstock, and hydraulic profile for different scenarios")
-    
-    # Check if overview sections exist
-    overview = st.session_state.get('wwtp_overview', {'sections': [], 'flow_connections': []})
-    
-    if not overview['sections']:
-        st.warning("⚠️ **No sections defined yet!** Please go to the **Overview** tab first to define your WWTP sections.")
-    else:
-        # Initialize hydraulic design storage
-        if 'hydraulic_design' not in st.session_state:
-            st.session_state.hydraulic_design = {}
-        
-        # Scenario selection for hydraulic design
-        st.subheader('Hydraulic Scenarios')
-        scenario_options = ['Normal Flow', 'Peak Flow', 'Low Flow', 'Emergency']
-        selected_hyd_scenario = st.selectbox(
-            'Select Hydraulic Scenario:',
-            scenario_options,
-            key='hyd_scenario_select'
-        )
-        
-        st.divider()
-        
-        st.subheader(f'Hydraulic Design - {selected_hyd_scenario}')
-        
-        # Initialize scenario if not exists
-        if selected_hyd_scenario not in st.session_state.hydraulic_design:
-            st.session_state.hydraulic_design[selected_hyd_scenario] = {}
-        
-        hyd_data = st.session_state.hydraulic_design[selected_hyd_scenario]
-        
-        # Stoplog and Penstock
-        col_hyd1, col_hyd2 = st.columns(2)
-        
-        with col_hyd1:
-            st.markdown("**🛑 Stoplog Design**")
-            hyd_data['stoplog_count'] = st.number_input(
-                'Number of Stoplogs',
-                min_value=0,
-                value=int(hyd_data.get('stoplog_count', 0)),
-                step=1,
-                key=f'stoplog_count_{selected_hyd_scenario}'
-            )
-            hyd_data['stoplog_height'] = st.number_input(
-                'Stoplog Height (m)',
-                min_value=0.0,
-                value=float(hyd_data.get('stoplog_height', 0.0)),
-                format="%.2f",
-                step=0.1,
-                key=f'stoplog_height_{selected_hyd_scenario}'
-            )
-        
-        with col_hyd2:
-            st.markdown("**🚪 Penstock Design**")
-            hyd_data['penstock_count'] = st.number_input(
-                'Number of Penstocks',
-                min_value=0,
-                value=int(hyd_data.get('penstock_count', 0)),
-                step=1,
-                key=f'penstock_count_{selected_hyd_scenario}'
-            )
-            hyd_data['penstock_diameter'] = st.number_input(
-                'Penstock Diameter (m)',
-                min_value=0.0,
-                value=float(hyd_data.get('penstock_diameter', 0.0)),
-                format="%.2f",
-                step=0.1,
-                key=f'penstock_diameter_{selected_hyd_scenario}'
-            )
-        
-        st.divider()
-        
-        # Hydraulic Profile by Section
-        st.subheader('Hydraulic Profile by Section')
-        
-        for section in overview['sections']:
-            section_name = section['name']
-            
-            # Initialize section hydraulic data if not exists
-            if section_name not in hyd_data:
-                hyd_data[section_name] = {
-                    'invert_in': 0.0,
-                    'invert_out': 0.0,
-                    'water_level': 0.0,
-                    'head_loss': 0.0
-                }
-            
-            with st.expander(f"📐 {section_name} - Hydraulic Profile", expanded=False):
-                col_profile1, col_profile2 = st.columns(2)
-                
-                with col_profile1:
-                    hyd_data[section_name]['invert_in'] = st.number_input(
-                        'Invert In (m)',
-                        value=float(hyd_data[section_name].get('invert_in', 0.0)),
-                        format="%.2f",
-                        step=0.1,
-                        key=f'hyd_invert_in_{section_name}_{selected_hyd_scenario}'
-                    )
-                    hyd_data[section_name]['invert_out'] = st.number_input(
-                        'Invert Out (m)',
-                        value=float(hyd_data[section_name].get('invert_out', 0.0)),
-                        format="%.2f",
-                        step=0.1,
-                        key=f'hyd_invert_out_{section_name}_{selected_hyd_scenario}'
-                    )
-                
-                with col_profile2:
-                    hyd_data[section_name]['water_level'] = st.number_input(
-                        'Water Level (m)',
-                        value=float(hyd_data[section_name].get('water_level', 0.0)),
-                        format="%.2f",
-                        step=0.1,
-                        key=f'hyd_water_level_{section_name}_{selected_hyd_scenario}'
-                    )
-                    hyd_data[section_name]['head_loss'] = st.number_input(
-                        'Head Loss (m)',
-                        value=float(hyd_data[section_name].get('head_loss', 0.0)),
-                        format="%.3f",
-                        step=0.01,
-                        key=f'hyd_head_loss_{section_name}_{selected_hyd_scenario}'
-                    )
-        
-        # Store updated hydraulic design
-        st.session_state.hydraulic_design[selected_hyd_scenario] = hyd_data
-        st.session_state.hydraulic_design = st.session_state.hydraulic_design
-        
-        st.divider()
-        
-        # Hydraulic Profile Summary
-        st.subheader('📊 Hydraulic Profile Summary')
-        profile_rows = []
-        for section in overview['sections']:
-            section_name = section['name']
-            if section_name in hyd_data:
-                profile = hyd_data[section_name]
-                profile_rows.append({
-                    'Section': section_name,
-                    'Invert In (m)': f"{profile['invert_in']:.2f}",
-                    'Invert Out (m)': f"{profile['invert_out']:.2f}",
-                    'Water Level (m)': f"{profile['water_level']:.2f}",
-                    'Head Loss (m)': f"{profile['head_loss']:.3f}"
-                })
-        
-        if profile_rows:
-            st.dataframe(pd.DataFrame(profile_rows), use_container_width=True, hide_index=True)
-
-# ==================== CONTROL PHILOSOPHY TAB ====================
-with tab4:
-    st.header('🎛️ Control Philosophy')
-    st.caption("Duty and standby equipment configuration based on sections defined in Overview tab")
-    
-    # Check if overview sections exist
-    overview = st.session_state.get('wwtp_overview', {'sections': [], 'flow_connections': []})
-    
-    if not overview['sections']:
-        st.warning("⚠️ **No sections defined yet!** Please go to the **Overview** tab first to define your WWTP sections.")
-    else:
-        # Initialize control philosophy storage
-        if 'control_philosophy' not in st.session_state:
-            st.session_state.control_philosophy = {}
-        
-        st.subheader('Equipment Duty/Standby Configuration')
-        
-        for section in overview['sections']:
-            section_name = section['name']
-            
-            # Get equipment list for this section
-            equipment_list = st.session_state.get('equipment_list', {})
-            section_equipment = equipment_list.get(section_name, {'major': [], 'minor': []})
-            all_equipment = section_equipment['major'] + section_equipment['minor']
-            
-            if all_equipment:
-                with st.expander(f"⚙️ {section_name} - Control Philosophy", expanded=False):
-                    # Initialize section control if not exists
-                    if section_name not in st.session_state.control_philosophy:
-                        st.session_state.control_philosophy[section_name] = {}
-                    
-                    control_data = st.session_state.control_philosophy[section_name]
-                    
-                    for equipment in all_equipment:
-                        if equipment not in control_data:
-                            control_data[equipment] = {
-                                'duty': 1,
-                                'standby': 0,
-                                'total': 1
-                            }
-                        
-                        col_ctrl1, col_ctrl2, col_ctrl3 = st.columns(3)
-                        
-                        with col_ctrl1:
-                            st.write(f"**{equipment}**")
-                        
-                        with col_ctrl2:
-                            control_data[equipment]['duty'] = st.number_input(
-                                'Duty Units',
-                                min_value=0,
-                                value=int(control_data[equipment].get('duty', 1)),
-                                step=1,
-                                key=f'ctrl_duty_{section_name}_{equipment}'
-                            )
-                        
-                        with col_ctrl3:
-                            control_data[equipment]['standby'] = st.number_input(
-                                'Standby Units',
-                                min_value=0,
-                                value=int(control_data[equipment].get('standby', 0)),
-                                step=1,
-                                key=f'ctrl_standby_{section_name}_{equipment}'
-                            )
-                        
-                        control_data[equipment]['total'] = control_data[equipment]['duty'] + control_data[equipment]['standby']
-                        st.caption(f"Total: {control_data[equipment]['total']} units ({control_data[equipment]['duty']} duty + {control_data[equipment]['standby']} standby)")
-            else:
-                st.info(f"💡 No equipment defined for {section_name}. Add equipment in the **P&ID + Equipment List** tab first.")
-        
-        st.divider()
-        
-        # Control Philosophy Summary
-        st.subheader('📋 Control Philosophy Summary')
-        control_rows = []
-        for section in overview['sections']:
-            section_name = section['name']
-            if section_name in st.session_state.control_philosophy:
-                control = st.session_state.control_philosophy[section_name]
-                for equipment, config in control.items():
-                    control_rows.append({
-                        'Section': section_name,
-                        'Equipment': equipment,
-                        'Duty': config['duty'],
-                        'Standby': config['standby'],
-                        'Total': config['total']
-                    })
-        
-        if control_rows:
-            st.dataframe(pd.DataFrame(control_rows), use_container_width=True, hide_index=True)
-            
-            # Summary statistics
-            total_duty = sum(row['Duty'] for row in control_rows)
-            total_standby = sum(row['Standby'] for row in control_rows)
-            total_units = sum(row['Total'] for row in control_rows)
-            
-            col_sum1, col_sum2, col_sum3 = st.columns(3)
-            with col_sum1:
-                st.metric('Total Duty Units', total_duty)
-            with col_sum2:
-                st.metric('Total Standby Units', total_standby)
-            with col_sum3:
-                st.metric('Total Units', total_units)
-        
-        # Store updated control philosophy
-        st.session_state.control_philosophy = st.session_state.control_philosophy
-
 # ==================== PYTHON CODING GUIDE TAB ====================
-with tab5:
+with tab2:
     st.header('🐍 Python Coding Guide')
     st.caption("Reference for writing Python code in Mass Balance sections. Add section-specific guide cards for future design reuse.")
 
