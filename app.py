@@ -7,6 +7,8 @@ import json
 import os
 import html
 import uuid
+from io import BytesIO
+import base64
 
 if 'projects' not in st.session_state:
     st.session_state.projects = {'current': 'IPRC WEST'}
@@ -33,8 +35,58 @@ PROJECTS_DIR = "projects_data"
 if not os.path.exists(PROJECTS_DIR):
     os.makedirs(PROJECTS_DIR)
 
+# Reference files storage path (for NAS deployment)
+REFERENCE_FILES_DIR = "reference_files"
+if not os.path.exists(REFERENCE_FILES_DIR):
+    os.makedirs(REFERENCE_FILES_DIR)
+
+def get_reference_file_path(project_key, ref_id, filename):
+    """Get the file path for a reference file"""
+    project_ref_dir = os.path.join(REFERENCE_FILES_DIR, project_key)
+    if not os.path.exists(project_ref_dir):
+        os.makedirs(project_ref_dir)
+    # Sanitize filename
+    safe_filename = "".join(c for c in filename if c.isalnum() or c in "._- ")
+    return os.path.join(project_ref_dir, f"ref_{ref_id}_{safe_filename}")
+
+def save_reference_file(project_key, ref_id, filename, file_data):
+    """Save a reference file to disk"""
+    file_path = get_reference_file_path(project_key, ref_id, filename)
+    with open(file_path, 'wb') as f:
+        if isinstance(file_data, bytes):
+            f.write(file_data)
+        else:
+            f.write(file_data.read())
+    return file_path
+
+def load_reference_file(file_path):
+    """Load a reference file from disk"""
+    if os.path.exists(file_path):
+        with open(file_path, 'rb') as f:
+            return f.read()
+    return None
+
+def delete_reference_file(file_path):
+    """Delete a reference file from disk"""
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
 def save_project_data(project_key):
     """Save all project data to JSON file"""
+    # Prepare references - files are stored on disk, only save metadata
+    references_to_save = {}
+    if 'references' in st.session_state:
+        references_to_save = {}
+        for section_key, ref_list in st.session_state.references.items():
+            references_to_save[section_key] = []
+            for ref in ref_list:
+                ref_copy = ref.copy()
+                # Remove file_data if exists (files are stored on disk)
+                if 'file_data' in ref_copy:
+                    del ref_copy['file_data']
+                # Keep file_path for reference
+                references_to_save[section_key].append(ref_copy)
+    
     project_data = {
         'project_name': st.session_state.projects.get(project_key, ''),
         'wwtp_design': st.session_state.get('wwtp_design', {}),
@@ -49,6 +101,8 @@ def save_project_data(project_key):
         'default_parameters_custom': st.session_state.get('project_defaults_custom', {'flow': [], 'kinetic': [], 'system': []}),
         'design_requirements': st.session_state.get('design_requirements', []),
         'python_coding_guide_cards': st.session_state.get('python_coding_guide_cards', []),
+        'references': references_to_save,
+        'reference_counter': st.session_state.get('reference_counter', 1),
         'saved_at': datetime.now().isoformat()
     }
     
@@ -152,6 +206,56 @@ def load_project_data(project_key):
                 st.session_state.python_coding_guide_cards = project_data['python_coding_guide_cards']
             elif 'python_coding_guide_cards' not in st.session_state:
                 st.session_state.python_coding_guide_cards = []
+            
+            # Load references - files are stored on disk, only metadata in JSON
+            if 'references' in project_data:
+                references_loaded = {}
+                max_ref_id = 0
+                for section_key, ref_list in project_data['references'].items():
+                    references_loaded[section_key] = []
+                    for ref in ref_list:
+                        ref_copy = ref.copy()
+                        # Handle backward compatibility: if file_data exists (old format), migrate to disk
+                        if 'file_data' in ref_copy:
+                            # Old format with base64 data - migrate to disk
+                            if ref_copy.get('_is_base64', False):
+                                file_data = base64.b64decode(ref_copy['file_data'])
+                            else:
+                                file_data = ref_copy['file_data']
+                            
+                            # Save to disk if not already saved
+                            if 'file_path' not in ref_copy or not os.path.exists(ref_copy['file_path']):
+                                filename = ref_copy.get('filename', f"ref_{ref_copy.get('id', 'unknown')}.pdf")
+                                if ref_copy.get('type') == 'image':
+                                    if not filename.endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                                        filename = f"{filename}.png"
+                                file_path = save_reference_file(project_key, ref_copy.get('id', 0), filename, file_data)
+                                ref_copy['file_path'] = file_path
+                            
+                            # Remove file_data from memory
+                            del ref_copy['file_data']
+                            if '_is_base64' in ref_copy:
+                                ref_copy.pop('_is_base64')
+                        
+                        references_loaded[section_key].append(ref_copy)
+                        # Track max reference ID
+                        if 'id' in ref_copy and ref_copy['id'] > max_ref_id:
+                            max_ref_id = ref_copy['id']
+                st.session_state.references = references_loaded
+                # Set counter to max ID + 1 to avoid conflicts
+                if 'reference_counter' in project_data:
+                    st.session_state.reference_counter = max(project_data['reference_counter'], max_ref_id + 1)
+                else:
+                    st.session_state.reference_counter = max_ref_id + 1
+            elif 'references' not in st.session_state:
+                st.session_state.references = {
+                    'section_1': [],
+                    'section_2': [],
+                    'section_3': []
+                }
+            
+            if 'reference_counter' not in st.session_state:
+                st.session_state.reference_counter = 1
             
             return True
         except Exception as e:
@@ -824,7 +928,7 @@ with st.expander("🔍 Session State Test"):
     st.write(f"Full session state: {st.session_state}")
 
 # Main app tabs
-tab0, tab1, tab2 = st.tabs(['Overview', 'Mass Balance', 'Python Coding Guide'])
+tab0, tab1, tab2, tab3 = st.tabs(['Overview', 'Mass Balance', 'Reference', 'Python Coding Guide'])
 
 # ==================== OVERVIEW TAB ====================
 with tab0:
@@ -1511,6 +1615,54 @@ with tab1:
             section_name = section['name']
             
             with st.expander(f"📊 {section_name} - Mass Balance", expanded=False):
+                # Cross-reference to Reference tab - Collapsible and hidden by default
+                with st.expander("🔗 Cross-Reference to Design Notes", expanded=False):
+                    all_references = []
+                    for section_key in ['section_1', 'section_2', 'section_3']:
+                        for ref in st.session_state.get('references', {}).get(section_key, []):
+                            all_references.append(ref)
+                    
+                    if all_references:
+                        # Get current cross-references for this section
+                        mb_cross_refs_key = f'mb_cross_refs_{section_name}'
+                        if mb_cross_refs_key not in st.session_state:
+                            st.session_state[mb_cross_refs_key] = []
+                        
+                        # Create reference options
+                        ref_options = {f"Ref {ref['id']} ({ref.get('type', 'text').upper()})": ref['id'] for ref in all_references}
+                        selected_ref_labels = st.multiselect(
+                            "Select References:",
+                            options=list(ref_options.keys()),
+                            default=[label for label in ref_options.keys() 
+                                    if ref_options[label] in st.session_state[mb_cross_refs_key]],
+                            key=f'cross_ref_select_{section_name}',
+                            help="Select references from the Reference tab that explain this section's calculations"
+                        )
+                        
+                        # Update cross-references
+                        selected_ref_ids = [ref_options[label] for label in selected_ref_labels]
+                        st.session_state[mb_cross_refs_key] = selected_ref_ids
+                        
+                        # Update references with cross-ref info
+                        for ref in all_references:
+                            if 'cross_refs' not in ref:
+                                ref['cross_refs'] = []
+                            ref_section = f"{section_name} - Mass Balance"
+                            if ref['id'] in selected_ref_ids:
+                                if ref_section not in ref['cross_refs']:
+                                    ref['cross_refs'].append(ref_section)
+                            else:
+                                if ref_section in ref['cross_refs']:
+                                    ref['cross_refs'].remove(ref_section)
+                        
+                        if selected_ref_labels:
+                            st.success(f"✅ Linked to: {', '.join(selected_ref_labels)}")
+                            st.caption("💡 View these references in the **Reference** tab")
+                    else:
+                        st.info("👆 No references available yet. Add references in the **Reference** tab first.")
+                
+                st.divider()
+                
                 # Determine intake loading source based on Process Flow Diagram
                 defaults = st.session_state.get('project_defaults', get_defaults())
                 
@@ -2499,8 +2651,980 @@ with tab1:
         # Store updated mass balance
         st.session_state.mass_balance = st.session_state.mass_balance
 
-# ==================== PYTHON CODING GUIDE TAB ====================
+# ==================== REFERENCE TAB ====================
 with tab2:
+    st.header('📚 Reference - Design Notes & Calculations')
+    st.caption("Document your design calculations, references, and notes. Auto-numbered references can be cross-referenced from Mass Balance tab.")
+    
+    # Add enhanced drag-and-drop and paste functionality CSS/JS
+    st.markdown("""
+    <style>
+    .upload-area {
+        border: 2px dashed #ccc;
+        border-radius: 8px;
+        padding: 20px;
+        text-align: center;
+        background-color: #f9f9f9;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        margin: 10px 0;
+    }
+    .upload-area:hover {
+        border-color: #1f77b4;
+        background-color: #f0f7ff;
+    }
+    .upload-area.drag-over {
+        border-color: #1f77b4;
+        background-color: #e6f2ff;
+        transform: scale(1.02);
+    }
+    .upload-area.has-file {
+        border-color: #28a745;
+        background-color: #d4edda;
+    }
+    .paste-indicator {
+        display: none;
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 20px 40px;
+        border-radius: 8px;
+        z-index: 10000;
+        font-size: 18px;
+    }
+    .paste-indicator.show {
+        display: block;
+    }
+    </style>
+    <script>
+    // Initialize paste handlers for image uploads
+    function initPasteHandler(uploadKey) {
+        const uploadArea = document.querySelector(`[data-testid="stFileUploader"][data-upload-key="${uploadKey}"]`);
+        if (!uploadArea) return;
+        
+        // Make the upload area focusable for paste events
+        uploadArea.setAttribute('tabindex', '0');
+        uploadArea.style.outline = 'none';
+        
+        // Handle paste event
+        uploadArea.addEventListener('paste', function(e) {
+            e.preventDefault();
+            const items = e.clipboardData.items;
+            
+            for (let i = 0; i < items.length; i++) {
+                if (items[i].type.indexOf('image') !== -1) {
+                    const blob = items[i].getAsFile();
+                    const reader = new FileReader();
+                    
+                    reader.onload = function(event) {
+                        const base64 = event.target.result;
+                        // Store in session state via Streamlit
+                        const indicator = document.getElementById('paste-indicator');
+                        if (indicator) {
+                            indicator.classList.add('show');
+                            setTimeout(() => indicator.classList.remove('show'), 2000);
+                        }
+                        // Trigger file input with the pasted image
+                        const input = uploadArea.querySelector('input[type="file"]');
+                        if (input) {
+                            const dataTransfer = new DataTransfer();
+                            dataTransfer.items.add(blob);
+                            input.files = dataTransfer.files;
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    };
+                    
+                    reader.readAsDataURL(blob);
+                    break;
+                }
+            }
+        });
+        
+        // Handle drag and drop visual feedback
+        uploadArea.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            uploadArea.closest('.upload-wrapper')?.classList.add('drag-over');
+        });
+        
+        uploadArea.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            uploadArea.closest('.upload-wrapper')?.classList.remove('drag-over');
+        });
+        
+        uploadArea.addEventListener('drop', function(e) {
+            e.preventDefault();
+            uploadArea.closest('.upload-wrapper')?.classList.remove('drag-over');
+        });
+    }
+    
+    // Initialize on page load
+    window.addEventListener('load', function() {
+        setTimeout(function() {
+            initPasteHandler('img_upload_1');
+            initPasteHandler('img_upload_2');
+            initPasteHandler('img_upload_3');
+        }, 500);
+    });
+    </script>
+    <div id="paste-indicator" class="paste-indicator">📋 Image pasted! Processing...</div>
+    """, unsafe_allow_html=True)
+    
+    # Initialize reference storage
+    if 'references' not in st.session_state:
+        st.session_state.references = {
+            'section_1': [],  # WWTP Sections
+            'section_2': [],  # Process Flow Diagram
+            'section_3': []   # Discharge Configuration
+        }
+        st.session_state.reference_counter = 1
+    
+    # Initialize pasted image storage
+    if 'pasted_images' not in st.session_state:
+        st.session_state.pasted_images = {}
+    
+    references = st.session_state.references
+    
+    # Get overview sections for context
+    overview = st.session_state.get('wwtp_overview', {'sections': [], 'flow_connections': []})
+    
+    # Helper function to render reference
+    def render_reference(ref, ref_num, section_key):
+        """Render a single reference item"""
+        with st.container():
+            col_ref_header, col_ref_delete = st.columns([5, 1])
+            with col_ref_header:
+                st.markdown(f"### Reference {ref_num}")
+            with col_ref_delete:
+                if st.button('🗑️', key=f'delete_ref_{ref_num}_{section_key}', help='Delete this reference'):
+                    # Delete file from disk if exists
+                    if 'file_path' in ref and ref['file_path']:
+                        delete_reference_file(ref['file_path'])
+                    # Remove from references
+                    references[section_key] = [r for r in references[section_key] if r['id'] != ref_num]
+                    # Clear cross-references from mass balance sections
+                    for mb_key in list(st.session_state.keys()):
+                        if mb_key.startswith('mb_cross_refs_'):
+                            ref_list = st.session_state[mb_key]
+                            if ref_num in ref_list:
+                                ref_list.remove(ref_num)
+                    st.rerun()
+            
+            # Reference type indicator
+            ref_type = ref.get('type', 'text')
+            type_icons = {
+                'pdf': '📄',
+                'image': '🖼️',
+                'text': '📝',
+                'latex': '🔢'
+            }
+            st.markdown(f"**Type:** {type_icons.get(ref_type, '📝')} {ref_type.upper()}")
+            
+            # Display content based on type
+            if ref_type == 'pdf':
+                file_path = ref.get('file_path')
+                filename = ref.get('filename', 'reference.pdf')
+                if file_path:
+                    pdf_data = load_reference_file(file_path)
+                    if pdf_data:
+                        st.download_button(
+                            label=f"📥 Download PDF: {filename}",
+                            data=pdf_data,
+                            file_name=filename,
+                            mime='application/pdf',
+                            key=f'download_pdf_{ref_num}'
+                        )
+                elif 'file_data' in ref:
+                    # Fallback for old format (backward compatibility)
+                    pdf_data = ref['file_data']
+                    if isinstance(pdf_data, str):
+                        pdf_data = base64.b64decode(pdf_data)
+                    st.download_button(
+                        label=f"📥 Download PDF: {filename}",
+                        data=pdf_data,
+                        file_name=filename,
+                        mime='application/pdf',
+                        key=f'download_pdf_{ref_num}'
+                    )
+                if 'description' in ref and ref['description']:
+                    st.markdown(f"**Description:** {ref['description']}")
+            
+            elif ref_type == 'image':
+                file_path = ref.get('file_path')
+                if file_path:
+                    img_data = load_reference_file(file_path)
+                    if img_data:
+                        st.image(BytesIO(img_data), use_container_width=True)
+                elif 'file_data' in ref:
+                    # Fallback for old format (backward compatibility)
+                    img_data = ref['file_data']
+                    if isinstance(img_data, str):
+                        img_data = base64.b64decode(img_data)
+                    st.image(BytesIO(img_data) if isinstance(img_data, bytes) else img_data, 
+                            use_container_width=True)
+                if 'description' in ref and ref['description']:
+                    st.markdown(f"**Description:** {ref['description']}")
+            
+            elif ref_type == 'text':
+                if 'content' in ref:
+                    st.markdown(ref['content'])
+            
+            elif ref_type == 'latex':
+                if 'equation' in ref:
+                    st.latex(ref['equation'])
+                if 'description' in ref and ref['description']:
+                    st.markdown(f"**Description:** {ref['description']}")
+            
+            # Remarks
+            if 'remarks' in ref and ref['remarks']:
+                st.markdown(f"**Remarks:** {ref['remarks']}")
+            
+            # Cross-reference info
+            if 'cross_refs' in ref and ref['cross_refs']:
+                st.caption(f"🔗 Referenced from: {', '.join(ref['cross_refs'])}")
+            
+            st.divider()
+    
+    # Section 1: WWTP Sections References
+    st.subheader('1️⃣ WWTP Sections - References')
+    
+    col_ref1_1, col_ref1_2 = st.columns([3, 1])
+    with col_ref1_1:
+        st.markdown("**Add Reference for WWTP Sections:**")
+    with col_ref1_2:
+        if st.button('➕ Add Reference', key='add_ref_section_1'):
+            st.session_state.ref_adding_section = 1
+            st.rerun()
+    
+    if st.session_state.get('ref_adding_section') == 1:
+        st.markdown("**➕ Add New Reference**")
+        # Move selectbox outside form so it can trigger immediate rerun
+        ref_type = st.selectbox(
+            "Reference Type:",
+            ['text', 'pdf', 'image', 'latex'],
+            key='ref_type_1'
+        )
+        
+        with st.form("add_reference_form_1", clear_on_submit=True):
+            # Use the ref_type from session state
+            ref_type = st.session_state.get('ref_type_1', 'text')
+            
+            if ref_type == 'pdf':
+                st.markdown("""
+                <div style="padding: 10px; background: #f0f7ff; border-radius: 5px; margin-bottom: 10px; border: 1px solid #1f77b4;">
+                    <strong>📄 PDF Upload Options:</strong><br>
+                    • <strong>Drag & Drop:</strong> Drag a PDF file directly onto the upload area below<br>
+                    • <strong>Click to Browse:</strong> Click the upload area to select a PDF file
+                </div>
+                """, unsafe_allow_html=True)
+                uploaded_file = st.file_uploader(
+                    "Upload PDF (Drag & Drop or Click to Browse)", 
+                    type=['pdf'], 
+                    key='pdf_upload_1',
+                    label_visibility="visible",
+                    help="Drag and drop a PDF file here or click to browse. Files are stored and ready for NAS deployment via Docker."
+                )
+                remarks = st.text_area("Remarks (explain calculation/design):", key='pdf_remarks_1', height=100)
+            
+            elif ref_type == 'image':
+                st.markdown("""
+                <div style="padding: 10px; background: #f0f7ff; border-radius: 5px; margin-bottom: 10px; border: 1px solid #1f77b4;">
+                    <strong>📤 Upload Options:</strong><br>
+                    • <strong>Drag & Drop:</strong> Drag an image file directly onto the upload area below<br>
+                    • <strong>Click to Browse:</strong> Click the upload area to select a file<br>
+                    • <strong>Paste from Clipboard:</strong> Copy an image (Ctrl+C / Cmd+C), then click the paste area below and press <strong>Ctrl+V / Cmd+V</strong>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                uploaded_files = st.file_uploader(
+                    "Upload Images (Drag & Drop or Click to Browse) - Multiple files allowed", 
+                    type=['png', 'jpg', 'jpeg', 'gif', 'webp'], 
+                    key='img_upload_1',
+                    label_visibility="visible",
+                    accept_multiple_files=True,
+                    help="Drag and drop multiple image files here or click to browse. Files are stored and ready for NAS deployment via Docker."
+                )
+                
+                # Paste image from clipboard
+                st.markdown("**Or paste image from clipboard:**")
+                paste_input = st.text_area(
+                    "Click here and paste image (Ctrl+V / Cmd+V) - Paste image data URL or use browser's paste feature", 
+                    key='paste_input_1',
+                    height=120,
+                    help="Copy an image to clipboard, then click in this box and press Ctrl+V (Windows/Linux) or Cmd+V (Mac). Some browsers also support pasting directly into the upload area above."
+                )
+                
+                pasted_image_data = None
+                if paste_input and paste_input.strip():
+                    if paste_input.startswith('data:image'):
+                        try:
+                            # Extract base64 data
+                            header, encoded = paste_input.split(',', 1)
+                            pasted_image_data = base64.b64decode(encoded)
+                            st.success("✅ Image pasted successfully from clipboard!")
+                        except Exception as e:
+                            st.error(f"Error parsing pasted image: {str(e)}")
+                    else:
+                        # Try to decode as base64 directly
+                        try:
+                            pasted_image_data = base64.b64decode(paste_input)
+                            st.success("✅ Image data decoded successfully!")
+                        except:
+                            st.info("💡 Paste a data URL (data:image/...) or base64 encoded image data")
+                
+                # Add JavaScript for direct paste into upload area (enhancement)
+                st.markdown("""
+                <script>
+                (function() {
+                    // Wait for Streamlit to render
+                    setTimeout(function() {
+                        const uploadInputs = document.querySelectorAll('input[type="file"]');
+                        uploadInputs.forEach(function(input) {
+                            if (input.accept && input.accept.includes('image')) {
+                                // Make the parent container focusable for paste
+                                const container = input.closest('[data-testid="stFileUploader"]') || input.parentElement;
+                                if (container) {
+                                    container.setAttribute('tabindex', '0');
+                                    container.style.outline = 'none';
+                                    
+                                    // Handle paste event
+                                    container.addEventListener('paste', function(e) {
+                                        e.preventDefault();
+                                        const items = e.clipboardData.items;
+                                        
+                                        for (let i = 0; i < items.length; i++) {
+                                            if (items[i].type.indexOf('image') !== -1) {
+                                                const blob = items[i].getAsFile();
+                                                const file = new File([blob], 'pasted_image.png', {type: 'image/png'});
+                                                
+                                                // Create a new FileList with the pasted file
+                                                const dataTransfer = new DataTransfer();
+                                                dataTransfer.items.add(file);
+                                                input.files = dataTransfer.files;
+                                                
+                                                // Trigger change event
+                                                const event = new Event('change', { bubbles: true });
+                                                input.dispatchEvent(event);
+                                                
+                                                // Visual feedback
+                                                const indicator = document.createElement('div');
+                                                indicator.textContent = '📋 Image pasted!';
+                                                indicator.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #28a745; color: white; padding: 10px 20px; border-radius: 5px; z-index: 10000;';
+                                                document.body.appendChild(indicator);
+                                                setTimeout(function() { indicator.remove(); }, 2000);
+                                                
+                                                break;
+                                            }
+                                        }
+                                    });
+                                    
+                                    // Enhanced drag and drop visual feedback
+                                    container.addEventListener('dragover', function(e) {
+                                        e.preventDefault();
+                                        container.style.border = '2px dashed #1f77b4';
+                                        container.style.backgroundColor = '#e6f2ff';
+                                    });
+                                    
+                                    container.addEventListener('dragleave', function(e) {
+                                        e.preventDefault();
+                                        container.style.border = '';
+                                        container.style.backgroundColor = '';
+                                    });
+                                    
+                                    container.addEventListener('drop', function(e) {
+                                        e.preventDefault();
+                                        container.style.border = '';
+                                        container.style.backgroundColor = '';
+                                    });
+                                }
+                            }
+                        });
+                    }, 500);
+                })();
+                </script>
+                """, unsafe_allow_html=True)
+                
+                remarks = st.text_area("Remarks (explain calculation/design):", key='img_remarks_1', height=100)
+            
+            elif ref_type == 'text':
+                content = st.text_area("Content:", height=200, key='text_content_1')
+                remarks = st.text_area("Remarks (explain calculation/design):", key='text_remarks_1', height=100)
+            
+            elif ref_type == 'latex':
+                equation = st.text_input("LaTeX Equation (e.g., E = mc^2):", key='latex_eq_1')
+                remarks = st.text_area("Remarks (explain calculation/design):", key='latex_remarks_1', height=100)
+            
+            col_sub1, col_can1 = st.columns(2)
+            with col_sub1:
+                submitted = st.form_submit_button("✅ Add Reference")
+            with col_can1:
+                cancel = st.form_submit_button("❌ Cancel")
+            
+            if submitted:
+                project_key = st.session_state.current_project
+                
+                if ref_type == 'pdf' and uploaded_file:
+                    ref_num = st.session_state.reference_counter
+                    new_ref = {
+                        'id': ref_num,
+                        'type': ref_type,
+                        'section': 'section_1',
+                        'remarks': remarks if 'remarks' in locals() else ''
+                    }
+                    filename = uploaded_file.name
+                    file_path = save_reference_file(project_key, ref_num, filename, uploaded_file)
+                    new_ref['file_path'] = file_path
+                    new_ref['filename'] = filename
+                    references['section_1'].append(new_ref)
+                    st.session_state.reference_counter += 1
+                    
+                elif ref_type == 'image':
+                    # Handle multiple uploaded files and pasted images
+                    images_added = False
+                    
+                    # Process multiple uploaded files
+                    if 'uploaded_files' in locals() and uploaded_files:
+                        for uploaded_file in uploaded_files:
+                            if uploaded_file:
+                                ref_num = st.session_state.reference_counter
+                                new_ref = {
+                                    'id': ref_num,
+                                    'type': ref_type,
+                                    'section': 'section_1',
+                                    'remarks': remarks if 'remarks' in locals() else ''
+                                }
+                                filename = uploaded_file.name
+                                file_path = save_reference_file(project_key, ref_num, filename, uploaded_file)
+                                new_ref['file_path'] = file_path
+                                new_ref['filename'] = filename
+                                references['section_1'].append(new_ref)
+                                st.session_state.reference_counter += 1
+                                images_added = True
+                    
+                    # Process pasted image
+                    if 'pasted_image_data' in locals() and pasted_image_data:
+                        ref_num = st.session_state.reference_counter
+                        new_ref = {
+                            'id': ref_num,
+                            'type': ref_type,
+                            'section': 'section_1',
+                            'remarks': remarks if 'remarks' in locals() else ''
+                        }
+                        # Determine file extension from data URL header or default to png
+                        ext = 'png'  # default
+                        if 'paste_input' in locals() and paste_input:
+                            if paste_input.startswith('data:image/png'):
+                                ext = 'png'
+                            elif paste_input.startswith('data:image/jpeg') or paste_input.startswith('data:image/jpg'):
+                                ext = 'jpg'
+                            elif paste_input.startswith('data:image/gif'):
+                                ext = 'gif'
+                            elif paste_input.startswith('data:image/webp'):
+                                ext = 'webp'
+                        filename = f"pasted_image_{ref_num}.{ext}"
+                        file_path = save_reference_file(project_key, ref_num, filename, pasted_image_data)
+                        new_ref['file_path'] = file_path
+                        new_ref['filename'] = filename
+                        references['section_1'].append(new_ref)
+                        st.session_state.reference_counter += 1
+                        images_added = True
+                    
+                    if not images_added:
+                        st.warning("⚠️ Please upload at least one image or paste an image.")
+                    else:
+                        st.session_state.ref_adding_section = None
+                        st.rerun()
+                        
+                if ref_type != 'image' or ('images_added' in locals() and not images_added):
+                    if ref_type == 'text':
+                        ref_num = st.session_state.reference_counter
+                        new_ref = {
+                            'id': ref_num,
+                            'type': ref_type,
+                            'section': 'section_1',
+                            'remarks': remarks if 'remarks' in locals() else '',
+                            'content': content
+                        }
+                        references['section_1'].append(new_ref)
+                        st.session_state.reference_counter += 1
+                        
+                    elif ref_type == 'latex':
+                        ref_num = st.session_state.reference_counter
+                        new_ref = {
+                            'id': ref_num,
+                            'type': ref_type,
+                            'section': 'section_1',
+                            'remarks': remarks if 'remarks' in locals() else '',
+                            'equation': equation
+                        }
+                        references['section_1'].append(new_ref)
+                        st.session_state.reference_counter += 1
+                    
+                    if ref_type != 'image':
+                        st.session_state.ref_adding_section = None
+                        st.rerun()
+            
+            if cancel:
+                st.session_state.ref_adding_section = None
+                st.rerun()
+    
+    # Display references for section 1
+    if references['section_1']:
+        st.markdown("**References:**")
+        for ref in references['section_1']:
+            render_reference(ref, ref['id'], 'section_1')
+    else:
+        st.info("👆 Add references above to document your WWTP Sections design calculations")
+    
+    st.divider()
+    
+    # Section 2: Process Flow Diagram References
+    st.subheader('2️⃣ Process Flow Diagram - References')
+    
+    col_ref2_1, col_ref2_2 = st.columns([3, 1])
+    with col_ref2_1:
+        st.markdown("**Add Reference for Process Flow Diagram:**")
+    with col_ref2_2:
+        if st.button('➕ Add Reference', key='add_ref_section_2'):
+            st.session_state.ref_adding_section = 2
+            st.rerun()
+    
+    if st.session_state.get('ref_adding_section') == 2:
+        st.markdown("**➕ Add New Reference**")
+        # Move selectbox outside form so it can trigger immediate rerun
+        ref_type = st.selectbox(
+            "Reference Type:",
+            ['text', 'pdf', 'image', 'latex'],
+            key='ref_type_2'
+        )
+        
+        with st.form("add_reference_form_2", clear_on_submit=True):
+            # Use the ref_type from session state
+            ref_type = st.session_state.get('ref_type_2', 'text')
+            
+            if ref_type == 'pdf':
+                st.markdown("""
+                <div style="padding: 10px; background: #f0f7ff; border-radius: 5px; margin-bottom: 10px; border: 1px solid #1f77b4;">
+                    <strong>📄 PDF Upload Options:</strong><br>
+                    • <strong>Drag & Drop:</strong> Drag a PDF file directly onto the upload area below<br>
+                    • <strong>Click to Browse:</strong> Click the upload area to select a PDF file
+                </div>
+                """, unsafe_allow_html=True)
+                uploaded_file = st.file_uploader(
+                    "Upload PDF (Drag & Drop or Click to Browse)", 
+                    type=['pdf'], 
+                    key='pdf_upload_2',
+                    label_visibility="visible",
+                    help="Drag and drop a PDF file here or click to browse. Files are stored and ready for NAS deployment via Docker."
+                )
+                remarks = st.text_area("Remarks (explain calculation/design):", key='pdf_remarks_2', height=100)
+            
+            elif ref_type == 'image':
+                st.markdown("""
+                <div style="padding: 10px; background: #f0f7ff; border-radius: 5px; margin-bottom: 10px; border: 1px solid #1f77b4;">
+                    <strong>📤 Upload Options:</strong><br>
+                    • <strong>Drag & Drop:</strong> Drag an image file directly onto the upload area below<br>
+                    • <strong>Click to Browse:</strong> Click the upload area to select a file<br>
+                    • <strong>Paste from Clipboard:</strong> Copy an image (Ctrl+C / Cmd+C), then click the paste area below and press <strong>Ctrl+V / Cmd+V</strong>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                uploaded_files = st.file_uploader(
+                    "Upload Images (Drag & Drop or Click to Browse) - Multiple files allowed", 
+                    type=['png', 'jpg', 'jpeg', 'gif', 'webp'], 
+                    key='img_upload_2',
+                    label_visibility="visible",
+                    accept_multiple_files=True,
+                    help="Drag and drop multiple image files here or click to browse. Files are stored and ready for NAS deployment via Docker."
+                )
+                
+                # Paste image from clipboard
+                st.markdown("**Or paste image from clipboard:**")
+                paste_input = st.text_area(
+                    "Click here and paste image (Ctrl+V / Cmd+V) - Paste image data URL or use browser's paste feature", 
+                    key='paste_input_2',
+                    height=120,
+                    help="Copy an image to clipboard, then click in this box and press Ctrl+V (Windows/Linux) or Cmd+V (Mac). Some browsers also support pasting directly into the upload area above."
+                )
+                
+                pasted_image_data = None
+                if paste_input and paste_input.strip():
+                    if paste_input.startswith('data:image'):
+                        try:
+                            # Extract base64 data
+                            header, encoded = paste_input.split(',', 1)
+                            pasted_image_data = base64.b64decode(encoded)
+                            st.success("✅ Image pasted successfully from clipboard!")
+                        except Exception as e:
+                            st.error(f"Error parsing pasted image: {str(e)}")
+                    else:
+                        # Try to decode as base64 directly
+                        try:
+                            pasted_image_data = base64.b64decode(paste_input)
+                            st.success("✅ Image data decoded successfully!")
+                        except:
+                            st.info("💡 Paste a data URL (data:image/...) or base64 encoded image data")
+                
+                remarks = st.text_area("Remarks (explain calculation/design):", key='img_remarks_2', height=100)
+            
+            elif ref_type == 'text':
+                content = st.text_area("Content:", height=200, key='text_content_2')
+                remarks = st.text_area("Remarks (explain calculation/design):", key='text_remarks_2', height=100)
+            
+            elif ref_type == 'latex':
+                equation = st.text_input("LaTeX Equation (e.g., E = mc^2):", key='latex_eq_2')
+                remarks = st.text_area("Remarks (explain calculation/design):", key='latex_remarks_2', height=100)
+            
+            col_sub2, col_can2 = st.columns(2)
+            with col_sub2:
+                submitted = st.form_submit_button("✅ Add Reference")
+            with col_can2:
+                cancel = st.form_submit_button("❌ Cancel")
+            
+            if submitted:
+                project_key = st.session_state.current_project
+                
+                if ref_type == 'pdf' and uploaded_file:
+                    ref_num = st.session_state.reference_counter
+                    new_ref = {
+                        'id': ref_num,
+                        'type': ref_type,
+                        'section': 'section_2',
+                        'remarks': remarks if 'remarks' in locals() else ''
+                    }
+                    filename = uploaded_file.name
+                    file_path = save_reference_file(project_key, ref_num, filename, uploaded_file)
+                    new_ref['file_path'] = file_path
+                    new_ref['filename'] = filename
+                    references['section_2'].append(new_ref)
+                    st.session_state.reference_counter += 1
+                    
+                elif ref_type == 'image':
+                    # Handle multiple uploaded files and pasted images
+                    images_added = False
+                    
+                    # Process multiple uploaded files
+                    if 'uploaded_files' in locals() and uploaded_files:
+                        for uploaded_file in uploaded_files:
+                            if uploaded_file:
+                                ref_num = st.session_state.reference_counter
+                                new_ref = {
+                                    'id': ref_num,
+                                    'type': ref_type,
+                                    'section': 'section_2',
+                                    'remarks': remarks if 'remarks' in locals() else ''
+                                }
+                                filename = uploaded_file.name
+                                file_path = save_reference_file(project_key, ref_num, filename, uploaded_file)
+                                new_ref['file_path'] = file_path
+                                new_ref['filename'] = filename
+                                references['section_2'].append(new_ref)
+                                st.session_state.reference_counter += 1
+                                images_added = True
+                    
+                    # Process pasted image
+                    if 'pasted_image_data' in locals() and pasted_image_data:
+                        ref_num = st.session_state.reference_counter
+                        new_ref = {
+                            'id': ref_num,
+                            'type': ref_type,
+                            'section': 'section_2',
+                            'remarks': remarks if 'remarks' in locals() else ''
+                        }
+                        # Determine file extension from data URL header or default to png
+                        ext = 'png'  # default
+                        if 'paste_input' in locals() and paste_input:
+                            if paste_input.startswith('data:image/png'):
+                                ext = 'png'
+                            elif paste_input.startswith('data:image/jpeg') or paste_input.startswith('data:image/jpg'):
+                                ext = 'jpg'
+                            elif paste_input.startswith('data:image/gif'):
+                                ext = 'gif'
+                            elif paste_input.startswith('data:image/webp'):
+                                ext = 'webp'
+                        filename = f"pasted_image_{ref_num}.{ext}"
+                        file_path = save_reference_file(project_key, ref_num, filename, pasted_image_data)
+                        new_ref['file_path'] = file_path
+                        new_ref['filename'] = filename
+                        references['section_2'].append(new_ref)
+                        st.session_state.reference_counter += 1
+                        images_added = True
+                    
+                    if not images_added:
+                        st.warning("⚠️ Please upload at least one image or paste an image.")
+                    else:
+                        st.session_state.ref_adding_section = None
+                        st.rerun()
+                        
+                if ref_type != 'image' or ('images_added' in locals() and not images_added):
+                    if ref_type == 'text':
+                        ref_num = st.session_state.reference_counter
+                        new_ref = {
+                            'id': ref_num,
+                            'type': ref_type,
+                            'section': 'section_2',
+                            'remarks': remarks if 'remarks' in locals() else '',
+                            'content': content
+                        }
+                        references['section_2'].append(new_ref)
+                        st.session_state.reference_counter += 1
+                        
+                    elif ref_type == 'latex':
+                        ref_num = st.session_state.reference_counter
+                        new_ref = {
+                            'id': ref_num,
+                            'type': ref_type,
+                            'section': 'section_2',
+                            'remarks': remarks if 'remarks' in locals() else '',
+                            'equation': equation
+                        }
+                        references['section_2'].append(new_ref)
+                        st.session_state.reference_counter += 1
+                    
+                    if ref_type != 'image':
+                        st.session_state.ref_adding_section = None
+                        st.rerun()
+            
+            if cancel:
+                st.session_state.ref_adding_section = None
+                st.rerun()
+    
+    # Display references for section 2
+    if references['section_2']:
+        st.markdown("**References:**")
+        for ref in references['section_2']:
+            render_reference(ref, ref['id'], 'section_2')
+    else:
+        st.info("👆 Add references above to document your Process Flow Diagram design calculations")
+    
+    st.divider()
+    
+    # Section 3: Discharge Configuration References
+    st.subheader('3️⃣ Discharge Configuration - References')
+    
+    col_ref3_1, col_ref3_2 = st.columns([3, 1])
+    with col_ref3_1:
+        st.markdown("**Add Reference for Discharge Configuration:**")
+    with col_ref3_2:
+        if st.button('➕ Add Reference', key='add_ref_section_3'):
+            st.session_state.ref_adding_section = 3
+            st.rerun()
+    
+    if st.session_state.get('ref_adding_section') == 3:
+        st.markdown("**➕ Add New Reference**")
+        # Move selectbox outside form so it can trigger immediate rerun
+        ref_type = st.selectbox(
+            "Reference Type:",
+            ['text', 'pdf', 'image', 'latex'],
+            key='ref_type_3'
+        )
+        
+        with st.form("add_reference_form_3", clear_on_submit=True):
+            # Use the ref_type from session state
+            ref_type = st.session_state.get('ref_type_3', 'text')
+            
+            if ref_type == 'pdf':
+                st.markdown("""
+                <div style="padding: 10px; background: #f0f7ff; border-radius: 5px; margin-bottom: 10px; border: 1px solid #1f77b4;">
+                    <strong>📄 PDF Upload Options:</strong><br>
+                    • <strong>Drag & Drop:</strong> Drag a PDF file directly onto the upload area below<br>
+                    • <strong>Click to Browse:</strong> Click the upload area to select a PDF file
+                </div>
+                """, unsafe_allow_html=True)
+                uploaded_file = st.file_uploader(
+                    "Upload PDF (Drag & Drop or Click to Browse)", 
+                    type=['pdf'], 
+                    key='pdf_upload_3',
+                    label_visibility="visible",
+                    help="Drag and drop a PDF file here or click to browse. Files are stored and ready for NAS deployment via Docker."
+                )
+                remarks = st.text_area("Remarks (explain calculation/design):", key='pdf_remarks_3', height=100)
+            
+            elif ref_type == 'image':
+                st.markdown("""
+                <div style="padding: 10px; background: #f0f7ff; border-radius: 5px; margin-bottom: 10px; border: 1px solid #1f77b4;">
+                    <strong>📤 Upload Options:</strong><br>
+                    • <strong>Drag & Drop:</strong> Drag an image file directly onto the upload area below<br>
+                    • <strong>Click to Browse:</strong> Click the upload area to select a file<br>
+                    • <strong>Paste from Clipboard:</strong> Copy an image (Ctrl+C / Cmd+C), then click the paste area below and press <strong>Ctrl+V / Cmd+V</strong>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                uploaded_files = st.file_uploader(
+                    "Upload Images (Drag & Drop or Click to Browse) - Multiple files allowed", 
+                    type=['png', 'jpg', 'jpeg', 'gif', 'webp'], 
+                    key='img_upload_3',
+                    label_visibility="visible",
+                    accept_multiple_files=True,
+                    help="Drag and drop multiple image files here or click to browse. Files are stored and ready for NAS deployment via Docker."
+                )
+                
+                # Paste image from clipboard
+                st.markdown("**Or paste image from clipboard:**")
+                paste_input = st.text_area(
+                    "Click here and paste image (Ctrl+V / Cmd+V) - Paste image data URL or use browser's paste feature", 
+                    key='paste_input_3',
+                    height=120,
+                    help="Copy an image to clipboard, then click in this box and press Ctrl+V (Windows/Linux) or Cmd+V (Mac). Some browsers also support pasting directly into the upload area above."
+                )
+                
+                pasted_image_data = None
+                if paste_input and paste_input.strip():
+                    if paste_input.startswith('data:image'):
+                        try:
+                            # Extract base64 data
+                            header, encoded = paste_input.split(',', 1)
+                            pasted_image_data = base64.b64decode(encoded)
+                            st.success("✅ Image pasted successfully from clipboard!")
+                        except Exception as e:
+                            st.error(f"Error parsing pasted image: {str(e)}")
+                    else:
+                        # Try to decode as base64 directly
+                        try:
+                            pasted_image_data = base64.b64decode(paste_input)
+                            st.success("✅ Image data decoded successfully!")
+                        except:
+                            st.info("💡 Paste a data URL (data:image/...) or base64 encoded image data")
+                
+                remarks = st.text_area("Remarks (explain calculation/design):", key='img_remarks_3', height=100)
+            
+            elif ref_type == 'text':
+                content = st.text_area("Content:", height=200, key='text_content_3')
+                remarks = st.text_area("Remarks (explain calculation/design):", key='text_remarks_3', height=100)
+            
+            elif ref_type == 'latex':
+                equation = st.text_input("LaTeX Equation (e.g., E = mc^2):", key='latex_eq_3')
+                remarks = st.text_area("Remarks (explain calculation/design):", key='latex_remarks_3', height=100)
+            
+            col_sub3, col_can3 = st.columns(2)
+            with col_sub3:
+                submitted = st.form_submit_button("✅ Add Reference")
+            with col_can3:
+                cancel = st.form_submit_button("❌ Cancel")
+            
+            if submitted:
+                project_key = st.session_state.current_project
+                
+                if ref_type == 'pdf' and uploaded_file:
+                    ref_num = st.session_state.reference_counter
+                    new_ref = {
+                        'id': ref_num,
+                        'type': ref_type,
+                        'section': 'section_3',
+                        'remarks': remarks if 'remarks' in locals() else ''
+                    }
+                    filename = uploaded_file.name
+                    file_path = save_reference_file(project_key, ref_num, filename, uploaded_file)
+                    new_ref['file_path'] = file_path
+                    new_ref['filename'] = filename
+                    references['section_3'].append(new_ref)
+                    st.session_state.reference_counter += 1
+                    
+                elif ref_type == 'image':
+                    # Handle multiple uploaded files and pasted images
+                    images_added = False
+                    
+                    # Process multiple uploaded files
+                    if 'uploaded_files' in locals() and uploaded_files:
+                        for uploaded_file in uploaded_files:
+                            if uploaded_file:
+                                ref_num = st.session_state.reference_counter
+                                new_ref = {
+                                    'id': ref_num,
+                                    'type': ref_type,
+                                    'section': 'section_3',
+                                    'remarks': remarks if 'remarks' in locals() else ''
+                                }
+                                filename = uploaded_file.name
+                                file_path = save_reference_file(project_key, ref_num, filename, uploaded_file)
+                                new_ref['file_path'] = file_path
+                                new_ref['filename'] = filename
+                                references['section_3'].append(new_ref)
+                                st.session_state.reference_counter += 1
+                                images_added = True
+                    
+                    # Process pasted image
+                    if 'pasted_image_data' in locals() and pasted_image_data:
+                        ref_num = st.session_state.reference_counter
+                        new_ref = {
+                            'id': ref_num,
+                            'type': ref_type,
+                            'section': 'section_3',
+                            'remarks': remarks if 'remarks' in locals() else ''
+                        }
+                        # Determine file extension from data URL header or default to png
+                        ext = 'png'  # default
+                        if 'paste_input' in locals() and paste_input:
+                            if paste_input.startswith('data:image/png'):
+                                ext = 'png'
+                            elif paste_input.startswith('data:image/jpeg') or paste_input.startswith('data:image/jpg'):
+                                ext = 'jpg'
+                            elif paste_input.startswith('data:image/gif'):
+                                ext = 'gif'
+                            elif paste_input.startswith('data:image/webp'):
+                                ext = 'webp'
+                        filename = f"pasted_image_{ref_num}.{ext}"
+                        file_path = save_reference_file(project_key, ref_num, filename, pasted_image_data)
+                        new_ref['file_path'] = file_path
+                        new_ref['filename'] = filename
+                        references['section_3'].append(new_ref)
+                        st.session_state.reference_counter += 1
+                        images_added = True
+                    
+                    if not images_added:
+                        st.warning("⚠️ Please upload at least one image or paste an image.")
+                    else:
+                        st.session_state.ref_adding_section = None
+                        st.rerun()
+                        
+                if ref_type != 'image' or ('images_added' in locals() and not images_added):
+                    if ref_type == 'text':
+                        ref_num = st.session_state.reference_counter
+                        new_ref = {
+                            'id': ref_num,
+                            'type': ref_type,
+                            'section': 'section_3',
+                            'remarks': remarks if 'remarks' in locals() else '',
+                            'content': content
+                        }
+                        references['section_3'].append(new_ref)
+                        st.session_state.reference_counter += 1
+                        
+                    elif ref_type == 'latex':
+                        ref_num = st.session_state.reference_counter
+                        new_ref = {
+                            'id': ref_num,
+                            'type': ref_type,
+                            'section': 'section_3',
+                            'remarks': remarks if 'remarks' in locals() else '',
+                            'equation': equation
+                        }
+                        references['section_3'].append(new_ref)
+                        st.session_state.reference_counter += 1
+                    
+                    if ref_type != 'image':
+                        st.session_state.ref_adding_section = None
+                        st.rerun()
+            
+            if cancel:
+                st.session_state.ref_adding_section = None
+                st.rerun()
+    
+    # Display references for section 3
+    if references['section_3']:
+        st.markdown("**References:**")
+        for ref in references['section_3']:
+            render_reference(ref, ref['id'], 'section_3')
+    else:
+        st.info("👆 Add references above to document your Discharge Configuration design calculations")
+    
+    # Store references
+    st.session_state.references = references
+
+# ==================== PYTHON CODING GUIDE TAB ====================
+with tab3:
     st.header('🐍 Python Coding Guide')
     st.caption("Reference for writing Python code in Mass Balance sections. Add section-specific guide cards for future design reuse.")
 

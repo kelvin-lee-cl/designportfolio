@@ -15,6 +15,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py ./app.py
 COPY projects_data ./projects_data
 
+# Create reference_files directory for NAS mounting
+RUN mkdir -p reference_files
+
 # Streamlit config: listen on all interfaces, port 8501 (default)
 EXPOSE 8501
 
