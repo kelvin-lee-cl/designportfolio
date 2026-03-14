@@ -505,430 +505,10 @@ if 'dr_show_add_form' not in st.session_state:
 if 'project_default_remarks' not in st.session_state:
     st.session_state.project_default_remarks = {}
 
-# Editable Default Parameters - display as "Name = value (unit)", click to edit; remark on hover
-with st.expander("📋 Design Parameters", expanded=False):
-    # Buttons first (no space above)
-    _col_edit, _col_remark, _col_add = st.columns([1, 1, 1])
-    with _col_edit:
-        _edit_label = "Done" if st.session_state.show_param_edit_buttons else "Edit"
-        if st.button(_edit_label, key="param_edit_toggle", help="Show/hide Edit buttons for each parameter"):
-            st.session_state.show_param_edit_buttons = not st.session_state.show_param_edit_buttons
-            st.rerun()
-    with _col_remark:
-        _remark_label = "Done" if st.session_state.show_param_remarks else "Remark"
-        if st.button(_remark_label, key="param_remark_toggle", help="Show/hide all parameter remarks"):
-            st.session_state.show_param_remarks = not st.session_state.show_param_remarks
-            st.rerun()
-    with _col_add:
-        _add_label = "Done" if st.session_state.show_add_param_forms else "Add"
-        if st.button(_add_label, key="param_add_toggle", help="Show/hide Add parameter forms"):
-            st.session_state.show_add_param_forms = not st.session_state.show_add_param_forms
-            st.rerun()
-    # CSS: reduce expander top padding and remove gap between buttons and three columns
-    st.markdown("""
-    <style>
-    /* Less top padding in expander content */
-    section[data-testid="stExpander"] details > div {
-        padding-top: 0 !important;
-    }
-    /* No gap between button row and content below (tight vertical spacing) */
-    section[data-testid="stExpander"] [data-testid="stVerticalBlock"] > div {
-        margin-top: 0 !important;
-        margin-bottom: 0 !important;
-        padding-top: 0.15rem !important;
-        padding-bottom: 0.15rem !important;
-    }
-    .default-params-section .param-row {
-        display: inline-block;
-        padding: 2px 0;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    st.markdown('<div class="default-params-section">', unsafe_allow_html=True)
-    defaults = st.session_state.project_defaults
-    units = st.session_state.project_default_units
-    remarks = st.session_state.project_default_remarks
-    for k in DEFAULT_PARAM_UNITS:
-        if k not in units:
-            units[k] = DEFAULT_PARAM_UNITS[k]
-        if k not in remarks:
-            remarks[k] = ''
-    custom = st.session_state.project_defaults_custom
-    editing = st.session_state.default_param_editing
-    
-    def fmt_display_val(v, max_decimals=6):
-        """Format number; no decimals when value is whole (e.g. 250.0 -> 250)."""
-        f = float(v)
-        if f == int(f):
-            return str(int(f))
-        s = f"{f:.{max_decimals}f}".rstrip('0').rstrip('.')
-        return s
-
-    def fmt_val(k, v):
-        if k == 'Q_avg':
-            return fmt_display_val(v, 6)
-        if k in ('Y', 'kd'):
-            return fmt_display_val(v, 3)
-        if k == 'SRT':
-            return str(int(v))
-        return fmt_display_val(v, 2)
-    
-    def param_line_with_tooltip(name, val_str, u, remark):
-        r = (remark or '').strip()
-        title_attr = f' title="{html.escape(r)}"' if r else ''
-        inner = f'<b>{html.escape(str(name))}</b> = {html.escape(str(val_str))} ({html.escape(str(u))})'
-        return f'<div class="param-row"{title_attr}>{inner}</div>'
-    
-    col_def1, col_def2, col_def3 = st.columns(3)
-    
-    # --- Flow & Loading ---
-    with col_def1:
-        st.markdown("**Flow & Loading**")
-        
-        for key in ['Q_avg', 'BOD_in', 'TSS_in']:
-            edit_key = key
-            if editing == edit_key:
-                new_val = st.number_input("Value", value=float(defaults.get(key, 60000 if key == 'Q_avg' else 0)), step=1000.0 if key == 'Q_avg' else 10.0, format="%.2f" if key == 'Q_avg' else "%.2f", key=f"edit_val_{key}")
-                new_unit = st.text_input("Unit", value=units.get(key, 'm³/day'), key=f"edit_unit_{key}")
-                new_remark = st.text_input("Remark", value=remarks.get(key, ''), key=f"edit_remark_{key}", placeholder="Hover to see this note")
-                if st.button("✅", key=f"save_{key}", help="Save"):
-                    defaults[key] = new_val
-                    units[key] = new_unit.strip() or units.get(key, '')
-                    remarks[key] = new_remark.strip()
-                    st.session_state.default_param_editing = None
-                    st.rerun()
-                if st.button("❌", key=f"cancel_{key}", help="Cancel"):
-                    st.session_state.default_param_editing = None
-                    st.rerun()
-            else:
-                val_str = fmt_val(key, defaults.get(key, 60000 if key == 'Q_avg' else 0))
-                u = units.get(key, '')
-                st.markdown(param_line_with_tooltip(key, val_str, u, remarks.get(key, '')), unsafe_allow_html=True)
-                if st.session_state.show_param_remarks:
-                    _r = (remarks.get(key, '') or '').strip()
-                    if _r:
-                        st.caption(_r)
-                if st.session_state.show_param_edit_buttons and st.button("✏️", key=f"edit_btn_{key}", help="Edit"):
-                    st.session_state.default_param_editing = edit_key
-                    st.rerun()
-        
-        for i, p in enumerate(list(custom['flow'])):
-            edit_key = f"flow_{i}"
-            if editing == edit_key:
-                new_name = st.text_input("Name", value=p.get('name', ''), key=f"edit_flow_name_{i}")
-                new_val = st.number_input("Value", value=float(p.get('value', 0)), step=0.0001, format="%.6f", key=f"edit_flow_val_{i}")
-                new_unit = st.text_input("Unit", value=p.get('unit', 'm³/day'), key=f"edit_flow_unit_{i}")
-                new_remark = st.text_input("Remark", value=p.get('remark', ''), key=f"edit_flow_remark_{i}", placeholder="Hover to see this note")
-                if st.button("✅", key=f"save_flow_{i}", help="Save"):
-                    if new_name and new_name.strip():
-                        p['name'] = new_name.strip()
-                    p['value'] = new_val
-                    p['unit'] = new_unit.strip() or 'm³/day'
-                    p['remark'] = new_remark.strip()
-                    st.session_state.default_param_editing = None
-                    st.rerun()
-                if st.button("❌", key=f"cancel_flow_{i}", help="Cancel"):
-                    st.session_state.default_param_editing = None
-                    st.rerun()
-                if st.button("🗑️", key=f"del_flow_{i}", help="Delete"):
-                    custom['flow'].pop(i)
-                    st.session_state.default_param_editing = None
-                    st.rerun()
-            else:
-                val_str = fmt_display_val(p.get('value', 0), 6)
-                u = p.get('unit', 'm³/day')
-                st.markdown(param_line_with_tooltip(p.get('name', ''), val_str, u, p.get('remark', '')), unsafe_allow_html=True)
-                if st.session_state.show_param_remarks:
-                    _r = (p.get('remark', '') or '').strip()
-                    if _r:
-                        st.caption(_r)
-                if st.session_state.show_param_edit_buttons and st.button("✏️", key=f"edit_btn_flow_{i}", help="Edit"):
-                    st.session_state.default_param_editing = edit_key
-                    st.rerun()
-        
-        if st.session_state.show_add_param_forms:
-            with st.form("add_flow_param", enter_to_submit=False):
-                new_name = st.text_input("Parameter name", key="new_flow_name", placeholder="e.g. NH3_in")
-                new_val = st.number_input("Value", value=0.0, step=0.0001, format="%.6f", key="new_flow_val")
-                new_unit = st.text_input("Unit", value="m³/day", key="new_flow_unit")
-                new_remark = st.text_input("Remark (optional)", key="new_flow_remark", placeholder="e.g. Influent concentration")
-                if st.form_submit_button("➕", help="Add"):
-                    if new_name and new_name.strip():
-                        name = new_name.strip()
-                        if not any(x['name'] == name for x in custom['flow']):
-                            custom['flow'].append({'name': name, 'value': float(new_val), 'unit': new_unit.strip() or 'm³/day', 'remark': (new_remark or '').strip()})
-                            st.rerun()
-    
-    # --- Kinetic ---
-    with col_def2:
-        st.markdown("**Kinetic Parameters**")
-        
-        for key in ['Y', 'kd', 'SRT']:
-            edit_key = key
-            if editing == edit_key:
-                new_val = st.number_input("Value", value=float(defaults.get(key, 0.67 if key == 'Y' else 0.06 if key == 'kd' else 10)), step=0.01 if key == 'Y' else 0.001 if key == 'kd' else 1, format="%.2f" if key == 'Y' else "%.3f" if key == 'kd' else "%d", key=f"edit_val_{key}")
-                new_unit = st.text_input("Unit", value=units.get(key, '-'), key=f"edit_unit_{key}")
-                new_remark = st.text_input("Remark", value=remarks.get(key, ''), key=f"edit_remark_{key}", placeholder="Hover to see this note")
-                if st.button("✅", key=f"save_{key}", help="Save"):
-                    defaults[key] = int(new_val) if key == 'SRT' else new_val
-                    units[key] = new_unit.strip() or units.get(key, '')
-                    remarks[key] = new_remark.strip()
-                    st.session_state.default_param_editing = None
-                    st.rerun()
-                if st.button("❌", key=f"cancel_{key}", help="Cancel"):
-                    st.session_state.default_param_editing = None
-                    st.rerun()
-            else:
-                val_str = fmt_val(key, defaults.get(key, 0))
-                u = units.get(key, '')
-                st.markdown(param_line_with_tooltip(key, val_str, u, remarks.get(key, '')), unsafe_allow_html=True)
-                if st.session_state.show_param_remarks:
-                    _r = (remarks.get(key, '') or '').strip()
-                    if _r:
-                        st.caption(_r)
-                if st.session_state.show_param_edit_buttons and st.button("✏️", key=f"edit_btn_{key}", help="Edit"):
-                    st.session_state.default_param_editing = edit_key
-                    st.rerun()
-        
-        for i, p in enumerate(list(custom['kinetic'])):
-            edit_key = f"kinetic_{i}"
-            if editing == edit_key:
-                new_name = st.text_input("Name", value=p.get('name', ''), key=f"edit_kinetic_name_{i}")
-                new_val = st.number_input("Value", value=float(p.get('value', 0)), step=0.001, format="%.3f", key=f"edit_kinetic_val_{i}")
-                new_unit = st.text_input("Unit", value=p.get('unit', '-'), key=f"edit_kinetic_unit_{i}")
-                new_remark = st.text_input("Remark", value=p.get('remark', ''), key=f"edit_kinetic_remark_{i}", placeholder="Hover to see this note")
-                if st.button("✅", key=f"save_kinetic_{i}", help="Save"):
-                    if new_name and new_name.strip():
-                        p['name'] = new_name.strip()
-                    p['value'] = new_val
-                    p['unit'] = new_unit.strip() or '-'
-                    p['remark'] = new_remark.strip()
-                    st.session_state.default_param_editing = None
-                    st.rerun()
-                if st.button("❌", key=f"cancel_kinetic_{i}", help="Cancel"):
-                    st.session_state.default_param_editing = None
-                    st.rerun()
-                if st.button("🗑️", key=f"del_kinetic_{i}", help="Delete"):
-                    custom['kinetic'].pop(i)
-                    st.session_state.default_param_editing = None
-                    st.rerun()
-            else:
-                val_str = fmt_display_val(p.get('value', 0), 3)
-                u = p.get('unit', '-')
-                st.markdown(param_line_with_tooltip(p.get('name', ''), val_str, u, p.get('remark', '')), unsafe_allow_html=True)
-                if st.session_state.show_param_remarks:
-                    _r = (p.get('remark', '') or '').strip()
-                    if _r:
-                        st.caption(_r)
-                if st.session_state.show_param_edit_buttons and st.button("✏️", key=f"edit_btn_kinetic_{i}", help="Edit"):
-                    st.session_state.default_param_editing = edit_key
-                    st.rerun()
-        
-        if st.session_state.show_add_param_forms:
-            with st.form("add_kinetic_param", enter_to_submit=False):
-                new_name = st.text_input("Parameter name", key="new_kinetic_name", placeholder="e.g. Ks")
-                new_val = st.number_input("Value", value=0.0, step=0.001, format="%.3f", key="new_kinetic_val")
-                new_unit = st.text_input("Unit", value="-", key="new_kinetic_unit")
-                new_remark = st.text_input("Remark (optional)", key="new_kinetic_remark", placeholder="e.g. Half-saturation constant")
-                if st.form_submit_button("➕", help="Add"):
-                    if new_name and new_name.strip():
-                        name = new_name.strip()
-                        if not any(x['name'] == name for x in custom['kinetic']):
-                            custom['kinetic'].append({'name': name, 'value': float(new_val), 'unit': new_unit.strip() or '-', 'remark': (new_remark or '').strip()})
-                            st.rerun()
-    
-    # --- System ---
-    with col_def3:
-        st.markdown("**System Parameters**")
-        
-        key = 'MLSS'
-        if editing == key:
-            new_val = st.number_input("Value", value=float(defaults.get(key, 3000)), step=100.0, key=f"edit_val_{key}")
-            new_unit = st.text_input("Unit", value=units.get(key, 'mg/L'), key=f"edit_unit_{key}")
-            new_remark = st.text_input("Remark", value=remarks.get(key, ''), key=f"edit_remark_{key}", placeholder="Hover to see this note")
-            if st.button("✅", key=f"save_{key}", help="Save"):
-                defaults[key] = new_val
-                units[key] = new_unit.strip() or 'mg/L'
-                remarks[key] = new_remark.strip()
-                st.session_state.default_param_editing = None
-                st.rerun()
-            if st.button("❌", key=f"cancel_{key}", help="Cancel"):
-                st.session_state.default_param_editing = None
-                st.rerun()
-        else:
-            val_str = fmt_val(key, defaults.get(key, 3000))
-            u = units.get(key, 'mg/L')
-            st.markdown(param_line_with_tooltip(key, val_str, u, remarks.get(key, '')), unsafe_allow_html=True)
-            if st.session_state.show_param_remarks:
-                _r = (remarks.get(key, '') or '').strip()
-                if _r:
-                    st.caption(_r)
-            if st.session_state.show_param_edit_buttons and st.button("✏️", key=f"edit_btn_{key}", help="Edit"):
-                st.session_state.default_param_editing = key
-                st.rerun()
-        
-        for i, p in enumerate(list(custom['system'])):
-            edit_key = f"system_{i}"
-            if editing == edit_key:
-                new_name = st.text_input("Name", value=p.get('name', ''), key=f"edit_system_name_{i}")
-                new_val = st.number_input("Value", value=float(p.get('value', 0)), step=1.0, key=f"edit_system_val_{i}")
-                new_unit = st.text_input("Unit", value=p.get('unit', '-'), key=f"edit_system_unit_{i}")
-                new_remark = st.text_input("Remark", value=p.get('remark', ''), key=f"edit_system_remark_{i}", placeholder="Hover to see this note")
-                if st.button("✅", key=f"save_system_{i}", help="Save"):
-                    if new_name and new_name.strip():
-                        p['name'] = new_name.strip()
-                    p['value'] = new_val
-                    p['unit'] = new_unit.strip() or '-'
-                    p['remark'] = new_remark.strip()
-                    st.session_state.default_param_editing = None
-                    st.rerun()
-                if st.button("❌", key=f"cancel_system_{i}", help="Cancel"):
-                    st.session_state.default_param_editing = None
-                    st.rerun()
-                if st.button("🗑️", key=f"del_system_{i}", help="Delete"):
-                    custom['system'].pop(i)
-                    st.session_state.default_param_editing = None
-                    st.rerun()
-            else:
-                val_str = fmt_display_val(p.get('value', 0), 2)
-                u = p.get('unit', '-')
-                st.markdown(param_line_with_tooltip(p.get('name', ''), val_str, u, p.get('remark', '')), unsafe_allow_html=True)
-                if st.session_state.show_param_remarks:
-                    _r = (p.get('remark', '') or '').strip()
-                    if _r:
-                        st.caption(_r)
-                if st.session_state.show_param_edit_buttons and st.button("✏️", key=f"edit_btn_system_{i}", help="Edit"):
-                    st.session_state.default_param_editing = edit_key
-                    st.rerun()
-        
-        if st.session_state.show_add_param_forms:
-            with st.form("add_system_param", enter_to_submit=False):
-                new_name = st.text_input("Parameter name", key="new_system_name", placeholder="e.g. HRT")
-                new_val = st.number_input("Value", value=0.0, step=1.0, key="new_system_val")
-                new_unit = st.text_input("Unit", value="-", key="new_system_unit")
-                new_remark = st.text_input("Remark (optional)", key="new_system_remark", placeholder="e.g. Hydraulic retention time")
-                if st.form_submit_button("➕", help="Add"):
-                    if new_name and new_name.strip():
-                        name = new_name.strip()
-                        if not any(x['name'] == name for x in custom['system']):
-                            custom['system'].append({'name': name, 'value': float(new_val), 'unit': new_unit.strip() or '-', 'remark': (new_remark or '').strip()})
-                            st.rerun()
-    
-    st.session_state.project_defaults = defaults
-    st.session_state.project_default_units = units
-    st.session_state.project_default_remarks = remarks
-    st.session_state.project_defaults_custom = custom
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    with st.expander("📄 View as JSON", expanded=False):
-        merged = dict(defaults)
-        merged_units = dict(units)
-        for cat_name, cat_key in [('Flow & Loading', 'flow'), ('Kinetic', 'kinetic'), ('System', 'system')]:
-            for p in custom[cat_key]:
-                merged[f"({cat_name}) {p['name']}"] = p['value']
-                merged_units[f"({cat_name}) {p['name']}"] = p.get('unit', '-')
-        st.json({"values": merged, "units": merged_units})
-
-# Design Requirement (name = value (unit), like Flow & Loading)
-with st.expander("📋 Design Requirement", expanded=False):
-    # Edit, Remark, Add buttons (same behavior as Default Parameters)
-    _dr_col_edit, _dr_col_remark, _dr_col_add = st.columns([1, 1, 1])
-    with _dr_col_edit:
-        _dr_edit_label = "Done" if st.session_state.dr_show_edit_buttons else "Edit"
-        if st.button(_dr_edit_label, key="dr_edit_toggle", help="Show/hide Edit buttons for each requirement"):
-            st.session_state.dr_show_edit_buttons = not st.session_state.dr_show_edit_buttons
-            st.rerun()
-    with _dr_col_remark:
-        _dr_remark_label = "Done" if st.session_state.dr_show_remarks else "Remark"
-        if st.button(_dr_remark_label, key="dr_remark_toggle", help="Show/hide all requirement remarks"):
-            st.session_state.dr_show_remarks = not st.session_state.dr_show_remarks
-            st.rerun()
-    with _dr_col_add:
-        _dr_add_label = "Done" if st.session_state.dr_show_add_form else "Add"
-        if st.button(_dr_add_label, key="dr_add_toggle", help="Show/hide Add requirement form"):
-            st.session_state.dr_show_add_form = not st.session_state.dr_show_add_form
-            st.rerun()
-
-    reqs = st.session_state.design_requirements
-    editing_req = st.session_state.design_requirement_editing
-    st.markdown('<div class="default-params-section">', unsafe_allow_html=True)
-
-    def req_line_display(name, val_str, unit, remark):
-        r = (remark or '').strip()
-        title_attr = f' title="{html.escape(r)}"' if r else ''
-        inner = f'<b>{html.escape(str(name))}</b> = {html.escape(str(val_str))} ({html.escape(str(unit))})'
-        return f'<div class="param-row"{title_attr}>{inner}</div>'
-
-    for i, r in enumerate(list(reqs)):
-        name = r.get('name', '')
-        value = r.get('value', 0)
-        unit = r.get('unit', '-')
-        remark = r.get('remark', '')
-        if editing_req == i:
-            new_name = st.text_input("Name", value=name, key=f"dr_name_{i}")
-            new_val = st.number_input("Value", value=float(value), step=0.01, format="%.2f", key=f"dr_val_{i}")
-            new_unit = st.text_input("Unit", value=unit, key=f"dr_unit_{i}")
-            new_remark = st.text_input("Remark (optional)", value=remark, key=f"dr_remark_{i}")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                if st.button("✅ Save", key=f"dr_save_{i}"):
-                    if new_name and new_name.strip():
-                        r['name'] = new_name.strip()
-                    r['value'] = new_val
-                    r['unit'] = (new_unit or '-').strip()
-                    r['remark'] = (new_remark or '').strip()
-                    st.session_state.design_requirement_editing = None
-                    st.rerun()
-            with c2:
-                if st.button("❌ Cancel", key=f"dr_cancel_{i}"):
-                    st.session_state.design_requirement_editing = None
-                    st.rerun()
-            with c3:
-                if st.button("🗑️ Delete", key=f"dr_del_{i}"):
-                    st.session_state.design_requirements.pop(i)
-                    st.session_state.design_requirement_editing = None
-                    st.rerun()
-        else:
-            val_str = f"{value:.2f}".rstrip('0').rstrip('.') if isinstance(value, float) else str(value)
-            st.markdown(req_line_display(name, val_str, unit, remark), unsafe_allow_html=True)
-            if st.session_state.dr_show_remarks:
-                _r = (remark or '').strip()
-                if _r:
-                    st.caption(_r)
-            if st.session_state.dr_show_edit_buttons and st.button("✏️", key=f"dr_edit_{i}", help="Edit"):
-                st.session_state.design_requirement_editing = i
-                st.rerun()
-
-    st.markdown('</div>', unsafe_allow_html=True)
-    if st.session_state.dr_show_add_form:
-        with st.form("add_design_requirement", enter_to_submit=False):
-            st.markdown("**Add requirement**")
-            add_name = st.text_input("Name", key="dr_add_name", placeholder="e.g. BOD_out")
-            add_val = st.number_input("Value", value=0.0, step=0.1, format="%.2f", key="dr_add_val")
-            add_unit = st.text_input("Unit", value="mg/L", key="dr_add_unit", placeholder="e.g. mg/L")
-            add_remark = st.text_input("Remark (optional)", key="dr_add_remark", placeholder="Optional note")
-            if st.form_submit_button("➕ Add"):
-                if add_name and add_name.strip():
-                    n = add_name.strip()
-                    if not any(x.get('name') == n for x in st.session_state.design_requirements):
-                        st.session_state.design_requirements.append({
-                            'name': n,
-                            'value': float(add_val),
-                            'unit': (add_unit or 'mg/L').strip(),
-                            'remark': (add_remark or '').strip()
-                        })
-                        st.rerun()
-
-# Test section
-with st.expander("🔍 Session State Test"):
-    st.write(f"Length of log: {len(st.session_state.log)}")
-    st.write(f"Current project: {st.session_state.current_project}")
-    st.write(f"Projects: {st.session_state.projects}")
-    st.write(f"Full session state: {st.session_state}")
-
 # Main app tabs
-tab0, tab1, tab2, tab3 = st.tabs(['Overview', 'Mass Balance', 'Reference', 'Python Coding Guide'])
+tab0, tab1, tab2, tab3, tab4 = st.tabs(
+    ['Overview', 'Design', 'Mass Balance', 'Reference', 'Python Coding Guide']
+)
 
 # ==================== OVERVIEW TAB ====================
 with tab0:
@@ -1590,8 +1170,432 @@ with tab0:
     # Store updated overview
     st.session_state.wwtp_overview = overview
 
-# ==================== MASS BALANCE TAB ====================
+# ==================== DESIGN TAB ====================
 with tab1:
+    # Editable Default Parameters - display as "Name = value (unit)", click to edit; remark on hover
+    with st.expander("📋 Design Parameters", expanded=False):
+        # Buttons first (no space above)
+        _col_edit, _col_remark, _col_add = st.columns([1, 1, 1])
+        with _col_edit:
+            _edit_label = "Done" if st.session_state.show_param_edit_buttons else "Edit"
+            if st.button(_edit_label, key="param_edit_toggle", help="Show/hide Edit buttons for each parameter"):
+                st.session_state.show_param_edit_buttons = not st.session_state.show_param_edit_buttons
+                st.rerun()
+        with _col_remark:
+            _remark_label = "Done" if st.session_state.show_param_remarks else "Remark"
+            if st.button(_remark_label, key="param_remark_toggle", help="Show/hide all parameter remarks"):
+                st.session_state.show_param_remarks = not st.session_state.show_param_remarks
+                st.rerun()
+        with _col_add:
+            _add_label = "Done" if st.session_state.show_add_param_forms else "Add"
+            if st.button(_add_label, key="param_add_toggle", help="Show/hide Add parameter forms"):
+                st.session_state.show_add_param_forms = not st.session_state.show_add_param_forms
+                st.rerun()
+        # CSS: reduce expander top padding and remove gap between buttons and three columns
+        st.markdown("""
+        <style>
+        /* Less top padding in expander content */
+        section[data-testid="stExpander"] details > div {
+            padding-top: 0 !important;
+        }
+        /* No gap between button row and content below (tight vertical spacing) */
+        section[data-testid="stExpander"] [data-testid="stVerticalBlock"] > div {
+            margin-top: 0 !important;
+            margin-bottom: 0 !important;
+            padding-top: 0.15rem !important;
+            padding-bottom: 0.15rem !important;
+        }
+        .default-params-section .param-row {
+            display: inline-block;
+            padding: 2px 0;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        st.markdown('<div class="default-params-section">', unsafe_allow_html=True)
+        defaults = st.session_state.project_defaults
+        units = st.session_state.project_default_units
+        remarks = st.session_state.project_default_remarks
+        for k in DEFAULT_PARAM_UNITS:
+            if k not in units:
+                units[k] = DEFAULT_PARAM_UNITS[k]
+            if k not in remarks:
+                remarks[k] = ''
+        custom = st.session_state.project_defaults_custom
+        editing = st.session_state.default_param_editing
+        
+        def fmt_display_val(v, max_decimals=6):
+            """Format number; no decimals when value is whole (e.g. 250.0 -> 250)."""
+            f = float(v)
+            if f == int(f):
+                return str(int(f))
+            s = f"{f:.{max_decimals}f}".rstrip('0').rstrip('.')
+            return s
+
+        def fmt_val(k, v):
+            if k == 'Q_avg':
+                return fmt_display_val(v, 6)
+            if k in ('Y', 'kd'):
+                return fmt_display_val(v, 3)
+            if k == 'SRT':
+                return str(int(v))
+            return fmt_display_val(v, 2)
+        
+        def param_line_with_tooltip(name, val_str, u, remark):
+            r = (remark or '').strip()
+            title_attr = f' title="{html.escape(r)}"' if r else ''
+            inner = f'<b>{html.escape(str(name))}</b> = {html.escape(str(val_str))} ({html.escape(str(u))})'
+            return f'<div class="param-row"{title_attr}>{inner}</div>'
+        
+        col_def1, col_def2, col_def3 = st.columns(3)
+        
+        # --- Flow & Loading ---
+        with col_def1:
+            st.markdown("**Flow & Loading**")
+            
+            for key in ['Q_avg', 'BOD_in', 'TSS_in']:
+                edit_key = key
+                if editing == edit_key:
+                    new_val = st.number_input("Value", value=float(defaults.get(key, 60000 if key == 'Q_avg' else 0)), step=1000.0 if key == 'Q_avg' else 10.0, format="%.2f" if key == 'Q_avg' else "%.2f", key=f"edit_val_{key}")
+                    new_unit = st.text_input("Unit", value=units.get(key, 'm³/day'), key=f"edit_unit_{key}")
+                    new_remark = st.text_input("Remark", value=remarks.get(key, ''), key=f"edit_remark_{key}", placeholder="Hover to see this note")
+                    if st.button("✅", key=f"save_{key}", help="Save"):
+                        defaults[key] = new_val
+                        units[key] = new_unit.strip() or units.get(key, '')
+                        remarks[key] = new_remark.strip()
+                        st.session_state.default_param_editing = None
+                        st.rerun()
+                    if st.button("❌", key=f"cancel_{key}", help="Cancel"):
+                        st.session_state.default_param_editing = None
+                        st.rerun()
+                else:
+                    val_str = fmt_val(key, defaults.get(key, 60000 if key == 'Q_avg' else 0))
+                    u = units.get(key, '')
+                    st.markdown(param_line_with_tooltip(key, val_str, u, remarks.get(key, '')), unsafe_allow_html=True)
+                    if st.session_state.show_param_remarks:
+                        _r = (remarks.get(key, '') or '').strip()
+                        if _r:
+                            st.caption(_r)
+                    if st.session_state.show_param_edit_buttons and st.button("✏️", key=f"edit_btn_{key}", help="Edit"):
+                        st.session_state.default_param_editing = edit_key
+                        st.rerun()
+            
+            for i, p in enumerate(list(custom['flow'])):
+                edit_key = f"flow_{i}"
+                if editing == edit_key:
+                    new_name = st.text_input("Name", value=p.get('name', ''), key=f"edit_flow_name_{i}")
+                    new_val = st.number_input("Value", value=float(p.get('value', 0)), step=0.0001, format="%.6f", key=f"edit_flow_val_{i}")
+                    new_unit = st.text_input("Unit", value=p.get('unit', 'm³/day'), key=f"edit_flow_unit_{i}")
+                    new_remark = st.text_input("Remark", value=p.get('remark', ''), key=f"edit_flow_remark_{i}", placeholder="Hover to see this note")
+                    if st.button("✅", key=f"save_flow_{i}", help="Save"):
+                        if new_name and new_name.strip():
+                            p['name'] = new_name.strip()
+                        p['value'] = new_val
+                        p['unit'] = new_unit.strip() or 'm³/day'
+                        p['remark'] = new_remark.strip()
+                        st.session_state.default_param_editing = None
+                        st.rerun()
+                    if st.button("❌", key=f"cancel_flow_{i}", help="Cancel"):
+                        st.session_state.default_param_editing = None
+                        st.rerun()
+                    if st.button("🗑️", key=f"del_flow_{i}", help="Delete"):
+                        custom['flow'].pop(i)
+                        st.session_state.default_param_editing = None
+                        st.rerun()
+                else:
+                    val_str = fmt_display_val(p.get('value', 0), 6)
+                    u = p.get('unit', 'm³/day')
+                    st.markdown(param_line_with_tooltip(p.get('name', ''), val_str, u, p.get('remark', '')), unsafe_allow_html=True)
+                    if st.session_state.show_param_remarks:
+                        _r = (p.get('remark', '') or '').strip()
+                        if _r:
+                            st.caption(_r)
+                    if st.session_state.show_param_edit_buttons and st.button("✏️", key=f"edit_btn_flow_{i}", help="Edit"):
+                        st.session_state.default_param_editing = edit_key
+                        st.rerun()
+            
+            if st.session_state.show_add_param_forms:
+                with st.form("add_flow_param", enter_to_submit=False):
+                    new_name = st.text_input("Parameter name", key="new_flow_name", placeholder="e.g. NH3_in")
+                    new_val = st.number_input("Value", value=0.0, step=0.0001, format="%.6f", key="new_flow_val")
+                    new_unit = st.text_input("Unit", value="m³/day", key="new_flow_unit")
+                    new_remark = st.text_input("Remark (optional)", key="new_flow_remark", placeholder="e.g. Influent concentration")
+                    if st.form_submit_button("➕", help="Add"):
+                        if new_name and new_name.strip():
+                            name = new_name.strip()
+                            if not any(x['name'] == name for x in custom['flow']):
+                                custom['flow'].append({'name': name, 'value': float(new_val), 'unit': new_unit.strip() or 'm³/day', 'remark': (new_remark or '').strip()})
+                                st.rerun()
+        
+        # --- Kinetic ---
+        with col_def2:
+            st.markdown("**Kinetic Parameters**")
+            
+            for key in ['Y', 'kd', 'SRT']:
+                edit_key = key
+                if editing == edit_key:
+                    new_val = st.number_input("Value", value=float(defaults.get(key, 0.67 if key == 'Y' else 0.06 if key == 'kd' else 10)), step=0.01 if key == 'Y' else 0.001 if key == 'kd' else 1, format="%.2f" if key == 'Y' else "%.3f" if key == 'kd' else "%d", key=f"edit_val_{key}")
+                    new_unit = st.text_input("Unit", value=units.get(key, '-'), key=f"edit_unit_{key}")
+                    new_remark = st.text_input("Remark", value=remarks.get(key, ''), key=f"edit_remark_{key}", placeholder="Hover to see this note")
+                    if st.button("✅", key=f"save_{key}", help="Save"):
+                        defaults[key] = int(new_val) if key == 'SRT' else new_val
+                        units[key] = new_unit.strip() or units.get(key, '')
+                        remarks[key] = new_remark.strip()
+                        st.session_state.default_param_editing = None
+                        st.rerun()
+                    if st.button("❌", key=f"cancel_{key}", help="Cancel"):
+                        st.session_state.default_param_editing = None
+                        st.rerun()
+                else:
+                    val_str = fmt_val(key, defaults.get(key, 0))
+                    u = units.get(key, '')
+                    st.markdown(param_line_with_tooltip(key, val_str, u, remarks.get(key, '')), unsafe_allow_html=True)
+                    if st.session_state.show_param_remarks:
+                        _r = (remarks.get(key, '') or '').strip()
+                        if _r:
+                            st.caption(_r)
+                    if st.session_state.show_param_edit_buttons and st.button("✏️", key=f"edit_btn_{key}", help="Edit"):
+                        st.session_state.default_param_editing = edit_key
+                        st.rerun()
+            
+            for i, p in enumerate(list(custom['kinetic'])):
+                edit_key = f"kinetic_{i}"
+                if editing == edit_key:
+                    new_name = st.text_input("Name", value=p.get('name', ''), key=f"edit_kinetic_name_{i}")
+                    new_val = st.number_input("Value", value=float(p.get('value', 0)), step=0.001, format="%.3f", key=f"edit_kinetic_val_{i}")
+                    new_unit = st.text_input("Unit", value=p.get('unit', '-'), key=f"edit_kinetic_unit_{i}")
+                    new_remark = st.text_input("Remark", value=p.get('remark', ''), key=f"edit_kinetic_remark_{i}", placeholder="Hover to see this note")
+                    if st.button("✅", key=f"save_kinetic_{i}", help="Save"):
+                        if new_name and new_name.strip():
+                            p['name'] = new_name.strip()
+                        p['value'] = new_val
+                        p['unit'] = new_unit.strip() or '-'
+                        p['remark'] = new_remark.strip()
+                        st.session_state.default_param_editing = None
+                        st.rerun()
+                    if st.button("❌", key=f"cancel_kinetic_{i}", help="Cancel"):
+                        st.session_state.default_param_editing = None
+                        st.rerun()
+                    if st.button("🗑️", key=f"del_kinetic_{i}", help="Delete"):
+                        custom['kinetic'].pop(i)
+                        st.session_state.default_param_editing = None
+                        st.rerun()
+                else:
+                    val_str = fmt_display_val(p.get('value', 0), 3)
+                    u = p.get('unit', '-')
+                    st.markdown(param_line_with_tooltip(p.get('name', ''), val_str, u, p.get('remark', '')), unsafe_allow_html=True)
+                    if st.session_state.show_param_remarks:
+                        _r = (p.get('remark', '') or '').strip()
+                        if _r:
+                            st.caption(_r)
+                    if st.session_state.show_param_edit_buttons and st.button("✏️", key=f"edit_btn_kinetic_{i}", help="Edit"):
+                        st.session_state.default_param_editing = edit_key
+                        st.rerun()
+            
+            if st.session_state.show_add_param_forms:
+                with st.form("add_kinetic_param", enter_to_submit=False):
+                    new_name = st.text_input("Parameter name", key="new_kinetic_name", placeholder="e.g. Ks")
+                    new_val = st.number_input("Value", value=0.0, step=0.001, format="%.3f", key="new_kinetic_val")
+                    new_unit = st.text_input("Unit", value="-", key="new_kinetic_unit")
+                    new_remark = st.text_input("Remark (optional)", key="new_kinetic_remark", placeholder="e.g. Half-saturation constant")
+                    if st.form_submit_button("➕", help="Add"):
+                        if new_name and new_name.strip():
+                            name = new_name.strip()
+                            if not any(x['name'] == name for x in custom['kinetic']):
+                                custom['kinetic'].append({'name': name, 'value': float(new_val), 'unit': new_unit.strip() or '-', 'remark': (new_remark or '').strip()})
+                                st.rerun()
+        
+        # --- System ---
+        with col_def3:
+            st.markdown("**System Parameters**")
+            
+            key = 'MLSS'
+            if editing == key:
+                new_val = st.number_input("Value", value=float(defaults.get(key, 3000)), step=100.0, key=f"edit_val_{key}")
+                new_unit = st.text_input("Unit", value=units.get(key, 'mg/L'), key=f"edit_unit_{key}")
+                new_remark = st.text_input("Remark", value=remarks.get(key, ''), key=f"edit_remark_{key}", placeholder="Hover to see this note")
+                if st.button("✅", key=f"save_{key}", help="Save"):
+                    defaults[key] = new_val
+                    units[key] = new_unit.strip() or 'mg/L'
+                    remarks[key] = new_remark.strip()
+                    st.session_state.default_param_editing = None
+                    st.rerun()
+                if st.button("❌", key=f"cancel_{key}", help="Cancel"):
+                    st.session_state.default_param_editing = None
+                    st.rerun()
+            else:
+                val_str = fmt_val(key, defaults.get(key, 3000))
+                u = units.get(key, 'mg/L')
+                st.markdown(param_line_with_tooltip(key, val_str, u, remarks.get(key, '')), unsafe_allow_html=True)
+                if st.session_state.show_param_remarks:
+                    _r = (remarks.get(key, '') or '').strip()
+                    if _r:
+                        st.caption(_r)
+                if st.session_state.show_param_edit_buttons and st.button("✏️", key=f"edit_btn_{key}", help="Edit"):
+                    st.session_state.default_param_editing = key
+                    st.rerun()
+            
+            for i, p in enumerate(list(custom['system'])):
+                edit_key = f"system_{i}"
+                if editing == edit_key:
+                    new_name = st.text_input("Name", value=p.get('name', ''), key=f"edit_system_name_{i}")
+                    new_val = st.number_input("Value", value=float(p.get('value', 0)), step=1.0, key=f"edit_system_val_{i}")
+                    new_unit = st.text_input("Unit", value=p.get('unit', '-'), key=f"edit_system_unit_{i}")
+                    new_remark = st.text_input("Remark", value=p.get('remark', ''), key=f"edit_system_remark_{i}", placeholder="Hover to see this note")
+                    if st.button("✅", key=f"save_system_{i}", help="Save"):
+                        if new_name and new_name.strip():
+                            p['name'] = new_name.strip()
+                        p['value'] = new_val
+                        p['unit'] = new_unit.strip() or '-'
+                        p['remark'] = new_remark.strip()
+                        st.session_state.default_param_editing = None
+                        st.rerun()
+                    if st.button("❌", key=f"cancel_system_{i}", help="Cancel"):
+                        st.session_state.default_param_editing = None
+                        st.rerun()
+                    if st.button("🗑️", key=f"del_system_{i}", help="Delete"):
+                        custom['system'].pop(i)
+                        st.session_state.default_param_editing = None
+                        st.rerun()
+                else:
+                    val_str = fmt_display_val(p.get('value', 0), 2)
+                    u = p.get('unit', '-')
+                    st.markdown(param_line_with_tooltip(p.get('name', ''), val_str, u, p.get('remark', '')), unsafe_allow_html=True)
+                    if st.session_state.show_param_remarks:
+                        _r = (p.get('remark', '') or '').strip()
+                        if _r:
+                            st.caption(_r)
+                    if st.session_state.show_param_edit_buttons and st.button("✏️", key=f"edit_btn_system_{i}", help="Edit"):
+                        st.session_state.default_param_editing = edit_key
+                        st.rerun()
+            
+            if st.session_state.show_add_param_forms:
+                with st.form("add_system_param", enter_to_submit=False):
+                    new_name = st.text_input("Parameter name", key="new_system_name", placeholder="e.g. HRT")
+                    new_val = st.number_input("Value", value=0.0, step=1.0, key="new_system_val")
+                    new_unit = st.text_input("Unit", value="-", key="new_system_unit")
+                    new_remark = st.text_input("Remark (optional)", key="new_system_remark", placeholder="e.g. Hydraulic retention time")
+                    if st.form_submit_button("➕", help="Add"):
+                        if new_name and new_name.strip():
+                            name = new_name.strip()
+                            if not any(x['name'] == name for x in custom['system']):
+                                custom['system'].append({'name': name, 'value': float(new_val), 'unit': new_unit.strip() or '-', 'remark': (new_remark or '').strip()})
+                                st.rerun()
+        
+        st.session_state.project_defaults = defaults
+        st.session_state.project_default_units = units
+        st.session_state.project_default_remarks = remarks
+        st.session_state.project_defaults_custom = custom
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        with st.expander("📄 View as JSON", expanded=False):
+            merged = dict(defaults)
+            merged_units = dict(units)
+            for cat_name, cat_key in [('Flow & Loading', 'flow'), ('Kinetic', 'kinetic'), ('System', 'system')]:
+                for p in custom[cat_key]:
+                    merged[f"({cat_name}) {p['name']}"] = p['value']
+                    merged_units[f"({cat_name}) {p['name']}"] = p.get('unit', '-')
+            st.json({"values": merged, "units": merged_units})
+
+    # Design Requirement (name = value (unit), like Flow & Loading)
+    with st.expander("📋 Design Requirement", expanded=False):
+        # Edit, Remark, Add buttons (same behavior as Default Parameters)
+        _dr_col_edit, _dr_col_remark, _dr_col_add = st.columns([1, 1, 1])
+        with _dr_col_edit:
+            _dr_edit_label = "Done" if st.session_state.dr_show_edit_buttons else "Edit"
+            if st.button(_dr_edit_label, key="dr_edit_toggle", help="Show/hide Edit buttons for each requirement"):
+                st.session_state.dr_show_edit_buttons = not st.session_state.dr_show_edit_buttons
+                st.rerun()
+        with _dr_col_remark:
+            _dr_remark_label = "Done" if st.session_state.dr_show_remarks else "Remark"
+            if st.button(_dr_remark_label, key="dr_remark_toggle", help="Show/hide all requirement remarks"):
+                st.session_state.dr_show_remarks = not st.session_state.dr_show_remarks
+                st.rerun()
+        with _dr_col_add:
+            _dr_add_label = "Done" if st.session_state.dr_show_add_form else "Add"
+            if st.button(_dr_add_label, key="dr_add_toggle", help="Show/hide Add requirement form"):
+                st.session_state.dr_show_add_form = not st.session_state.dr_show_add_form
+                st.rerun()
+
+        reqs = st.session_state.design_requirements
+        editing_req = st.session_state.design_requirement_editing
+        st.markdown('<div class="default-params-section">', unsafe_allow_html=True)
+
+        def req_line_display(name, val_str, unit, remark):
+            r = (remark or '').strip()
+            title_attr = f' title="{html.escape(r)}"' if r else ''
+            inner = f'<b>{html.escape(str(name))}</b> = {html.escape(str(val_str))} ({html.escape(str(unit))})'
+            return f'<div class="param-row"{title_attr}>{inner}</div>'
+
+        for i, r in enumerate(list(reqs)):
+            name = r.get('name', '')
+            value = r.get('value', 0)
+            unit = r.get('unit', '-')
+            remark = r.get('remark', '')
+            if editing_req == i:
+                new_name = st.text_input("Name", value=name, key=f"dr_name_{i}")
+                new_val = st.number_input("Value", value=float(value), step=0.01, format="%.2f", key=f"dr_val_{i}")
+                new_unit = st.text_input("Unit", value=unit, key=f"dr_unit_{i}")
+                new_remark = st.text_input("Remark (optional)", value=remark, key=f"dr_remark_{i}")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    if st.button("✅ Save", key=f"dr_save_{i}"):
+                        if new_name and new_name.strip():
+                            r['name'] = new_name.strip()
+                        r['value'] = new_val
+                        r['unit'] = (new_unit or '-').strip()
+                        r['remark'] = (new_remark or '').strip()
+                        st.session_state.design_requirement_editing = None
+                        st.rerun()
+                with c2:
+                    if st.button("❌ Cancel", key=f"dr_cancel_{i}"):
+                        st.session_state.design_requirement_editing = None
+                        st.rerun()
+                with c3:
+                    if st.button("🗑️ Delete", key=f"dr_del_{i}"):
+                        st.session_state.design_requirements.pop(i)
+                        st.session_state.design_requirement_editing = None
+                        st.rerun()
+            else:
+                val_str = f"{value:.2f}".rstrip('0').rstrip('.') if isinstance(value, float) else str(value)
+                st.markdown(req_line_display(name, val_str, unit, remark), unsafe_allow_html=True)
+                if st.session_state.dr_show_remarks:
+                    _r = (remark or '').strip()
+                    if _r:
+                        st.caption(_r)
+                if st.session_state.dr_show_edit_buttons and st.button("✏️", key=f"dr_edit_{i}", help="Edit"):
+                    st.session_state.design_requirement_editing = i
+                    st.rerun()
+
+        st.markdown('</div>', unsafe_allow_html=True)
+        if st.session_state.dr_show_add_form:
+            with st.form("add_design_requirement", enter_to_submit=False):
+                st.markdown("**Add requirement**")
+                add_name = st.text_input("Name", key="dr_add_name", placeholder="e.g. BOD_out")
+                add_val = st.number_input("Value", value=0.0, step=0.1, format="%.2f", key="dr_add_val")
+                add_unit = st.text_input("Unit", value="mg/L", key="dr_add_unit", placeholder="e.g. mg/L")
+                add_remark = st.text_input("Remark (optional)", key="dr_add_remark", placeholder="Optional note")
+                if st.form_submit_button("➕ Add"):
+                    if add_name and add_name.strip():
+                        n = add_name.strip()
+                        if not any(x.get('name') == n for x in st.session_state.design_requirements):
+                            st.session_state.design_requirements.append({
+                                'name': n,
+                                'value': float(add_val),
+                                'unit': (add_unit or 'mg/L').strip(),
+                                'remark': (add_remark or '').strip()
+                            })
+                            st.rerun()
+
+    # Test section
+    with st.expander("🔍 Session State Test"):
+        st.write(f"Length of log: {len(st.session_state.log)}")
+        st.write(f"Current project: {st.session_state.current_project}")
+        st.write(f"Projects: {st.session_state.projects}")
+        st.write(f"Full session state: {st.session_state}")
+
+# ==================== MASS BALANCE TAB ====================
+with tab2:
     st.header('🔄 Mass Balance - Sewage, Centrate & Sludge')
     st.caption("Mass balance calculations based on sections defined in Overview tab")
     
@@ -1687,6 +1691,9 @@ with tab1:
                 all_downstream = set(conn['to'] for conn in overview['flow_connections'])
                 is_entry_point = section_name not in all_downstream
                 
+                # Check if this is a sludge stream section (should not use Initial Loading from design parameters)
+                is_sludge_stream = section.get('flow_type') == 'sludge' or len(sludge_source_sections) > 0
+                
                 # Calculate combined intake from all sources (supports all Flow & Loading conc params)
                 conc_params = get_flow_loading_conc_params()
                 custom_flow = st.session_state.get('project_defaults_custom', {}).get('flow', [])
@@ -1700,8 +1707,8 @@ with tab1:
                         d[k] = v
                     return d
                 
-                # 1. Initial loading (for entry point sections)
-                if is_entry_point:
+                # 1. Initial loading (for entry point sections, but NOT for sludge stream sections)
+                if is_entry_point and not is_sludge_stream:
                     initial_flow = float(defaults.get('Q_avg', 60000))
                     vals = {mb_key: _get_conc_val_from_defaults(dk, defaults, custom_flow) for dk, mb_key in conc_params}
                     total_intake_flow += initial_flow
@@ -2393,10 +2400,13 @@ with tab1:
                             all_downstream_iter = set(conn['to'] for conn in overview['flow_connections'])
                             is_entry_point_iter = section_name not in all_downstream_iter
                             
+                            # Check if this is a sludge stream section (should not use Initial Loading from design parameters)
+                            is_sludge_stream_iter = section.get('flow_type') == 'sludge' or len(sludge_source_sections_iter) > 0
+                            
                             total_intake_flow_iter = 0.0
                             total_intake_loads_iter = {mb_key: 0.0 for _, mb_key in conc_params_iter}
                             
-                            if is_entry_point_iter:
+                            if is_entry_point_iter and not is_sludge_stream_iter:
                                 initial_flow_iter = float(defaults_iter.get('Q_avg', 60000))
                                 vals_iter = {mb_key: _get_conc_val_from_defaults(dk, defaults_iter, custom_flow_iter) for dk, mb_key in conc_params_iter}
                                 total_intake_flow_iter += initial_flow_iter
@@ -2652,7 +2662,7 @@ with tab1:
         st.session_state.mass_balance = st.session_state.mass_balance
 
 # ==================== REFERENCE TAB ====================
-with tab2:
+with tab3:
     st.header('📚 Reference - Design Notes & Calculations')
     st.caption("Document your design calculations, references, and notes. Auto-numbered references can be cross-referenced from Mass Balance tab.")
     
@@ -3624,7 +3634,7 @@ with tab2:
     st.session_state.references = references
 
 # ==================== PYTHON CODING GUIDE TAB ====================
-with tab3:
+with tab4:
     st.header('🐍 Python Coding Guide')
     st.caption("Reference for writing Python code in Mass Balance sections. Add section-specific guide cards for future design reuse.")
 
